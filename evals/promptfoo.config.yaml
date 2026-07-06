@@ -1,0 +1,11 @@
+description: Wanfa standard operations baseline eval placeholder
+providers:
+  - id: echo
+prompts:
+  - "{{question}}"
+tests:
+  - vars:
+      question: "你好"
+    assert:
+      - type: contains
+        value: "你好"

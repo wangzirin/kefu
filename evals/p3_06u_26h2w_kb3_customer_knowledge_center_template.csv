@@ -1,0 +1,6 @@
+record_type,business_object,question,answer,policy_text,forbidden_text,handoff_condition,source_uri,expected_behavior,notes
+business_object,示例套餐,,,,,,internal://customer-template/business-object,建立业务对象,把产品、服务、课程、门店或套餐写成一个对象
+standard_qa,示例套餐,这个套餐适合什么人？,适合需要先小范围验证智能客服效果的团队。,,,,internal://customer-template/standard-qa,可自动回复候选,标准问答需要包含问题、答案和来源
+process_policy,示例套餐,,,售后问题先核对订单和服务记录，再给出处理时限。,,,internal://customer-template/process-policy,作为流程政策引用,流程政策不等于一定自动回复
+forbidden_commitment,示例套餐,,,,不得承诺私下转账、绕平台处理、保证效果或无条件赔付。,,internal://customer-template/forbidden-commitment,命中后阻断或转人工,禁用承诺必须明确写出来
+handoff_rule,示例套餐,,,,,投诉、赔偿、法律风险、平台封号或客户强烈不满时转人工。,internal://customer-template/handoff-rule,转人工,转人工规则用于保护客户和商家

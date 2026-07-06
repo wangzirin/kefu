@@ -1,0 +1,8 @@
+gap_case_id,expected_source_uri,expected_final_answer_factuality_status,expected_citation_sufficient,expected_forbidden_commitment_passed,expected_handoff_correct,requires_final_answer_sample,requires_secure_text_comparison_runtime,final_answer_text_must_not_be_exported
+h2w11i-gap-006,internal://docs/p3/knowledge-maintenance-v1,requires_manual_fact_label,true,true,true,true,true,true
+h2w11i-gap-007,internal://docs/p3/after-sales-v1,requires_manual_fact_label,true,true,true,true,true,true
+h2w11i-gap-008,internal://docs/p3/after-sales-v1,not_applicable_if_handoff_correct,true,true,true,true,false,true
+h2w11i-gap-009,internal://docs/p3/pricing-service-v1,requires_manual_fact_label,true,true,true,true,true,true
+h2w11i-gap-010,internal://docs/p3/model-cost-v1,requires_manual_fact_label,true,true,true,true,true,true
+h2w11i-gap-011,internal://docs/p3/citation-quality-v1,requires_manual_fact_label,true,true,true,true,true,true
+h2w11i-gap-012,internal://docs/p3/trial-signoff-v1,not_applicable_if_handoff_correct,true,true,true,true,false,true

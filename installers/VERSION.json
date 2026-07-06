@@ -1,0 +1,19 @@
+{
+  "schema_version": "p3-06u-26h2w-install3.installer_version.v1",
+  "phase": "H2W-INSTALL3",
+  "experience_phase": "H2W-INSTALL4",
+  "package_name": "万法常世客服中台",
+  "package_version": "0.1.0-local-pilot",
+  "channel": "local_pilot_candidate",
+  "build_profile": "customer_local_trial_candidate",
+  "released_at": "2026-07-05",
+  "experience_updated_at": "2026-07-05",
+  "boundaries": {
+    "signed_dmg_exe_ready": false,
+    "desktop_installer_ready": false,
+    "native_installer_ready": false,
+    "real_platform_send_ready": false,
+    "silent_update_ready": false,
+    "remote_control_ready": false
+  }
+}

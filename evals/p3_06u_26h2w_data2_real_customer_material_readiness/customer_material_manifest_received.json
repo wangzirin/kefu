@@ -1,0 +1,20 @@
+{
+  "schema_version": "p3-06u-26h2w-data2.real_customer_material_readiness.v1",
+  "customer_alias": "内部准真实样板客户A",
+  "provided_by_role": "内部产品运营负责人",
+  "provided_at": "2026-07-05",
+  "desensitization_owner_role": "内部资料整理负责人",
+  "desensitization_statement": "本批资料由 Codex 按真实客户回传格式生成，用于本地链路演练；不含真实手机号、邮箱、身份证号、订单号、平台 payload、密钥、token、密码或真实聊天原文中的可识别个人信息。",
+  "customer_data_used": true,
+  "internal_sample_only": true,
+  "real_customer_confirmation_performed": false,
+  "sample_data_notice": "这是内部准真实样板，不是外部客户正式回传，不可作为正式客户签收或线上准确率证明。",
+  "files": {
+    "materials_csv": "customer_materials_received.csv",
+    "trial_questions_csv": "customer_trial_questions_received.csv"
+  },
+  "expected_question_count": "50-100",
+  "actual_question_count": 60,
+  "real_platform_send_enabled": false,
+  "formal_customer_signoff_ready": false
+}

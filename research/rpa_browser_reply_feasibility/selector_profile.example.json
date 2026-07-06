@@ -1,0 +1,11 @@
+{
+  "platformRoot": "[data-rpa-platform=\"mock-customer-service\"]",
+  "unreadSession": "[data-rpa=\"session\"][data-unread=\"true\"]",
+  "activeCustomerName": "[data-rpa=\"active-customer-name\"]",
+  "activeChannel": "[data-rpa=\"active-channel\"]",
+  "latestInboundMessage": "[data-rpa=\"latest-inbound-message\"]",
+  "replyEditor": "[data-rpa=\"reply-editor\"]",
+  "sendButton": "[data-rpa=\"send-button\"]",
+  "sendState": "[data-rpa=\"send-state\"]",
+  "sentMessage": "[data-rpa=\"sent-message\"]"
+}

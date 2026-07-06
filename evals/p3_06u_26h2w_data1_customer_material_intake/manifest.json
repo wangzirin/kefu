@@ -1,0 +1,13 @@
+{
+  "schema_version": "p3-06u-26h2w-data1.customer_material_intake.v1",
+  "material_source": "internal_rehearsal_sample",
+  "customer_data_used": false,
+  "internal_sample_only": true,
+  "files": {
+    "materials_csv": "evals/p3_06u_26h2w_data1_customer_material_intake/customer_materials_internal_sample.csv",
+    "trial_questions_csv": "evals/p3_06u_26h2w_data1_customer_material_intake/customer_trial_questions_internal_sample.csv"
+  },
+  "record_count": 64,
+  "question_count": 62,
+  "desensitization_statement": "内部准真实样板，不含真实客户原文、手机号、邮箱、平台 payload 或密钥。"
+}

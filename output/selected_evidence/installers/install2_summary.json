@@ -1,0 +1,114 @@
+{
+  "phase": "H2W-INSTALL2",
+  "schema_version": "p3-06u-26h2w-install2.native_installer_readiness.v1",
+  "status": "native_wrapper_candidate_ready",
+  "readiness": {
+    "installer_plan_ready": true,
+    "native_wrapper_candidate_ready": true,
+    "signed_dmg_exe_ready": false,
+    "desktop_installer_ready": false,
+    "native_installer_ready": false,
+    "real_platform_send_ready": false,
+    "worker_enabled_by_default": false,
+    "default_admin_password_created": false,
+    "secret_written_by_installer": false
+  },
+  "checks": {
+    "install1": {
+      "path": "output/p3_06u_26h2w_install1_nontechnical_customer_starter/summary.json",
+      "expected_status": "ready_for_nontechnical_customer_startup_rehearsal",
+      "actual_status": "ready_for_nontechnical_customer_startup_rehearsal",
+      "passed": true
+    },
+    "macos": {
+      "directory_exists": true,
+      "readme_exists": true,
+      "preflight_exists": true,
+      "launcher_exists": true,
+      "uninstall_notes_exists": true,
+      "preflight_bash_syntax_ok": true,
+      "launcher_bash_syntax_ok": true,
+      "preflight_checks_docker": true,
+      "preflight_requires_customer_env": true,
+      "preflight_blocks_external_write": true,
+      "preflight_blocks_worker": true,
+      "preflight_blocks_dev_bootstrap": true,
+      "preflight_blocks_default_admin_password": true,
+      "preflight_blocks_placeholder_password": true,
+      "launcher_calls_preflight": true,
+      "launcher_calls_safe_start_script": true,
+      "launcher_does_not_create_customer_env": true,
+      "launcher_keeps_terminal_open": true
+    },
+    "windows": {
+      "directory_exists": true,
+      "readme_exists": true,
+      "powershell_exists": true,
+      "bat_exists": true,
+      "uninstall_notes_exists": true,
+      "powershell_checks_docker": true,
+      "powershell_requires_customer_env": true,
+      "powershell_blocks_external_write": true,
+      "powershell_blocks_worker": true,
+      "powershell_blocks_dev_bootstrap": true,
+      "powershell_blocks_default_admin_password": true,
+      "powershell_blocks_placeholder_password": true,
+      "powershell_uses_safe_compose_files": true,
+      "bat_calls_powershell": true,
+      "bat_does_not_create_customer_env": true
+    },
+    "customer_env_template": {
+      "template_exists": true,
+      "concrete_customer_env_not_in_repo": true,
+      "dev_bootstrap_disabled": true,
+      "external_write_disabled": true,
+      "worker_disabled": true,
+      "admin_bootstrap_password_empty": true,
+      "uses_pgvector_store": true,
+      "database_password_placeholder": true,
+      "model_keys_empty": true
+    },
+    "safe_start_script_reused": true
+  },
+  "blockers": [],
+  "warnings": [],
+  "evidence": {
+    "summary_json": {
+      "path": "output/p3_06u_26h2w_install2_native_installer_readiness/summary.json"
+    },
+    "markdown": {
+      "path": "docs/P3-06U-26H2W_INSTALL2_NATIVE_INSTALLER_READINESS.md"
+    },
+    "macos_dir": {
+      "path": "installers/macos",
+      "present": true
+    },
+    "windows_dir": {
+      "path": "installers/windows",
+      "present": true
+    },
+    "install1_summary": {
+      "path": "output/p3_06u_26h2w_install1_nontechnical_customer_starter/summary.json",
+      "present": true
+    }
+  },
+  "boundaries": {
+    "signed_dmg_exe_ready": false,
+    "desktop_installer_ready": false,
+    "native_installer_ready": false,
+    "real_platform_send_performed": false,
+    "trusted_inbound_worker_enabled_by_default": false,
+    "customer_env_created_or_modified": false,
+    "secret_written_by_installer": false,
+    "default_admin_password_created": false,
+    "remote_control_performed": false,
+    "silent_update_performed": false
+  },
+  "not_ready_for": [
+    "Apple/Windows 代码签名",
+    "正式 dmg/exe 安装包",
+    "静默安装或静默更新",
+    "自动填写客户本地密码或模型凭据",
+    "真实平台外发"
+  ]
+}

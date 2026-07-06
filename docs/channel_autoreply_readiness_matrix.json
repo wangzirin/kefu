@@ -1,0 +1,206 @@
+{
+  "as_of": "2026-06-29",
+  "scope": "Only official APIs, open-platform permissions, service-market authorization, or customer-owned web entry points are considered valid. Personal-account hooks, group-control tools, browser automation, simulated clicks, and reverse-engineered IM protocols are excluded from commercial delivery.",
+  "current_system_summary": {
+    "production_autoreply_ready": false,
+    "real_external_write_enabled": false,
+    "current_code_ready_providers": [
+      "website",
+      "wecom",
+      "wechat_official_account"
+    ],
+    "important_boundary": "The current code can run a website sandbox Copilot chain and can store official-channel connector/webhook contracts, but it does not send real messages to WeCom, WeChat Official Account, Douyin, Xiaohongshu, Taobao, JD, Pinduoduo, or any other external platform."
+  },
+  "channels": [
+    {
+      "provider": "website",
+      "display_name": "官网客服组件",
+      "official_autoreply_feasibility": "confirmed_self_owned_entry",
+      "current_system_status": "P3-04 has a signed website sandbox inbound chain, trusted message creation, AI draft orchestration, human review, outbox draft, and blocked connector send plan. Real external write remains disabled.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "lite_pilot_copilot_first_then_optional_controlled_auto_reply",
+      "required_before_real_test": [
+        "Production domain and HTTPS",
+        "Real signing secret stored outside source code",
+        "Replay nonce/idempotency storage",
+        "Explicit auto-reply policy for low-risk FAQ only",
+        "Kill switch and audit evidence"
+      ],
+      "official_sources": [
+        "Customer-owned channel; no third-party platform permission required"
+      ],
+      "commercial_conclusion": "This is the safest first pilot entry, but current state is still Copilot/manual-confirmation first, not unattended production auto-reply."
+    },
+    {
+      "provider": "wecom",
+      "display_name": "企业微信客服 / 微信客服",
+      "official_autoreply_feasibility": "confirmed_yes_with_official_authorization",
+      "current_system_status": "Provider contract and fixture verifier exist. Current code has SHA1 fixture verification and trusted-inbound pipeline hooks, but production AES decrypt, official send API, access token lifecycle, service-state handling, and real receipt reconciliation are not implemented.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "official_sandbox_then_human_reviewed_outbox_then_low_risk_autoreply",
+      "required_before_real_test": [
+        "CorpID and WeCom customer-service secret",
+        "客服账号, 接待人员, and customer-service link configured",
+        "Callback Token and EncodingAESKey",
+        "Callback domain reachable through HTTPS",
+        "AES decrypt and message schema mapping",
+        "Access token refresh and error-code mapping",
+        "Rate limit, retry, receipt, and kill switch"
+      ],
+      "official_sources": [
+        "https://developer.work.weixin.qq.com/document/path/94677",
+        "https://developer.work.weixin.qq.com/document/path/94693",
+        "https://developer.work.weixin.qq.com/document/path/94692"
+      ],
+      "commercial_conclusion": "Can be a priority official channel, but not yet connected in our system. Do not promise WeCom auto-reply until an official sandbox account is tested end to end."
+    },
+    {
+      "provider": "wechat_official_account",
+      "display_name": "微信公众号 / 服务号客服消息",
+      "official_autoreply_feasibility": "confirmed_yes_with_window_and_message_type_limits",
+      "current_system_status": "Provider contract and fixture verifier exist. Current code supports fixture SHA1 verification, but production secure-mode decrypt, passive reply timing, customer-service message window handling, and official send API are not implemented.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "official_account_passive_reply_or_customer_service_message_with_human_guard",
+      "required_before_real_test": [
+        "Verified service account or official account developer access",
+        "Server URL, Token, and optional EncodingAESKey",
+        "Message signature verification and decrypt",
+        "Passive reply timing policy",
+        "Customer-service message window policy",
+        "OpenID mapping and idempotency",
+        "Content safety and manual override"
+      ],
+      "official_sources": [
+        "https://developers.weixin.qq.com/doc/service/api/message/message/api_send_text_msg.html",
+        "https://developers.weixin.qq.com/doc/offiaccount/Message_Management/Service_Center_messages.html"
+      ],
+      "commercial_conclusion": "Officially feasible, but constrained by account type, user interaction window, message type, and response timing. It should be sold as an official-account connector after sandbox verification, not as unrestricted proactive messaging."
+    },
+    {
+      "provider": "douyin_open",
+      "display_name": "抖音开放平台私信 / 企业号私信",
+      "official_autoreply_feasibility": "confirmed_yes_with_authorized_scopes",
+      "current_system_status": "No provider contract, verifier, event parser, token manager, send adapter, or UI configuration exists in our code.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "official_open_platform_private_message_connector_after_scope_approval",
+      "required_before_real_test": [
+        "Open Douyin app and account authorization",
+        "Private-message or enterprise-message scope approval",
+        "Webhook/event subscription and signature verification",
+        "OAuth token refresh",
+        "Msg-Id/idempotency mapping",
+        "Send-message API adapter",
+        "Risk policy for marketing, sensitive content, and human fallback"
+      ],
+      "official_sources": [
+        "https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/interaction-management/private-message/send-msg",
+        "https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/webhooks/event-list",
+        "https://developer.open-douyin.com/docs/resource/zh-CN/mini-app/develop/server/customer-service/receive-msg/push-msg"
+      ],
+      "commercial_conclusion": "Official auto-reply is possible for approved account/application scenarios, but current system has zero Douyin connector implementation. First deliver as Copilot/readiness plan, then build official sandbox."
+    },
+    {
+      "provider": "doudian_feige",
+      "display_name": "抖店 / 飞鸽客服",
+      "official_autoreply_feasibility": "partially_confirmed_platform_support_but_public_generic_chat_api_not_confirmed",
+      "current_system_status": "No provider contract, verifier, event parser, order context integration, send adapter, or service-market packaging exists in our code.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "service_market_or_official_feige_permission_first_copilot_before_autosend",
+      "required_before_real_test": [
+        "Merchant test shop or service-provider qualification",
+        "Feige/customer-service permission package confirmation",
+        "Whether conversation message send API is open to this app",
+        "Order/after-sale context authorization",
+        "Official callback and signature verification",
+        "Content and refund/compensation human-review policy"
+      ],
+      "official_sources": [
+        "https://op.jinritemai.com/docs/api-docs/188",
+        "https://op.jinritemai.com/docs/question-docs/96/6260",
+        "https://fxg.jinritemai.com/ffa/maomao/agreement/AiService"
+      ],
+      "commercial_conclusion": "Do not sell as guaranteed fully automatic Feige reply before permission confirmation. Safer initial mode is order/after-sale Copilot plus human confirmation."
+    },
+    {
+      "provider": "xiaohongshu",
+      "display_name": "小红书专业号 / 商业开放平台私信",
+      "official_autoreply_feasibility": "partially_confirmed_third_party_private_message_tool_but_general_autoreply_unverified",
+      "current_system_status": "No provider contract, verifier, event parser, token manager, send adapter, or official tool-app packaging exists in our code.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "authorized_private_message_tool_or_lead_copilot_only_until_send_permission_is_confirmed",
+      "required_before_real_test": [
+        "Professional account or business platform authorization",
+        "Private-message third-party tool permission confirmation",
+        "Webhook/event and send-message API documentation from the official console",
+        "Token, signature, idempotency, and content-risk policy",
+        "Human confirmation for commerce, refund, medical, legal, and brand-risk content"
+      ],
+      "official_sources": [
+        "https://open.xiaohongshu.com/document/developer/file/4",
+        "https://ad-market.xiaohongshu.com/docs-center?articleId=4437&bizType=943"
+      ],
+      "commercial_conclusion": "Public sources confirm official business/open-platform routes and third-party private-message tooling, but not enough to promise universal automatic private-message reply. Treat as partner/permission-gated."
+    },
+    {
+      "provider": "taobao_tmall",
+      "display_name": "淘宝 / 天猫 / 千牛 / 店小蜜",
+      "official_autoreply_feasibility": "permission_gated_service_market_or_customer_panel_plugin",
+      "current_system_status": "No provider contract, verifier, order/buyer identity mapping, send adapter, service-market app, or Qianniu panel plugin exists in our code.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "service_market_or_qianniu_customer_panel_copilot_before_direct_autosend",
+      "required_before_real_test": [
+        "Alibaba/Taobao open-platform app qualification",
+        "Service-market or customer-panel plugin review",
+        "Clear confirmation whether chat send is available to this app",
+        "Shop/buyer/order authorization",
+        "Message compliance and after-sale human-review policy",
+        "No browser automation or simulated Qianniu operation"
+      ],
+      "official_sources": [
+        "https://open.taobao.com/",
+        "https://developer.alibaba.com/docs/doc.htm?articleId=119210&docType=1&treeId=780",
+        "https://jaq-doc.alibaba.com/docs/api.htm?apiId=22542"
+      ],
+      "commercial_conclusion": "Do not promise generic Taobao/Tmall automatic chat send without official service-market permission. A defensible path is customer-panel Copilot, knowledge suggestion, and human-confirmed replies first."
+    },
+    {
+      "provider": "jd",
+      "display_name": "京东 / 咚咚客服",
+      "official_autoreply_feasibility": "permission_gated_jos_api_package",
+      "current_system_status": "No provider contract, verifier, JOS auth, send adapter, or order-context mapping exists in our code.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "jos_permission_package_then_copilot_or_controlled_autosend",
+      "required_before_real_test": [
+        "JD JOS app and shop authorization",
+        "客服机器人基础包 or relevant message API permission",
+        "Dingdong/Dongdong message send and callback contract",
+        "Order/buyer identity mapping",
+        "Rate limit, error code, review, and audit policy"
+      ],
+      "official_sources": [
+        "https://jos.jd.com/",
+        "https://jos.jd.com/apilist?apiGroupId=952&apiGroupName=%E5%AE%A2%E6%9C%8D%E6%9C%BA%E5%99%A8%E4%BA%BA-%E5%9F%BA%E7%A1%80%E5%8C%85"
+      ],
+      "commercial_conclusion": "Likely feasible only after permission-package approval. Current system is not connected; sell as later standard/enterprise connector, not Lite default."
+    },
+    {
+      "provider": "pinduoduo",
+      "display_name": "拼多多 / 多多客服",
+      "official_autoreply_feasibility": "not_publicly_verified_for_general_chat_send",
+      "current_system_status": "No provider contract, verifier, PDD auth, message API adapter, or order-context mapping exists in our code.",
+      "production_autoreply_ready": false,
+      "recommended_delivery_mode": "manual_copilot_until_official_permission_and_api_documentation_are_obtained",
+      "required_before_real_test": [
+        "Pinduoduo open-platform app qualification",
+        "Official customer-service message API documentation from the app console",
+        "Merchant/shop authorization",
+        "Callback/signature/send API confirmation",
+        "No browser automation, simulated clicks, or unofficial workbench control"
+      ],
+      "official_sources": [
+        "https://open.pinduoduo.com/"
+      ],
+      "commercial_conclusion": "Publicly accessible sources did not verify a general official customer-service chat send API. Do not promise automatic reply until official permission and API docs are obtained inside the merchant/developer console."
+    }
+  ]
+}

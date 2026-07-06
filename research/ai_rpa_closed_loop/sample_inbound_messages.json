@@ -1,0 +1,140 @@
+{
+  "messages": [
+    {
+      "message_id": "demo-001",
+      "channel": "qianniu_research",
+      "customer_name": "测试客户A",
+      "text": "你好，这个订单一般多久发货？",
+      "received_at": "2026-07-02T10:00:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-002",
+      "channel": "pdd_research",
+      "customer_name": "测试客户B",
+      "text": "收到后发现质量问题，我要退款，不处理我就投诉。",
+      "received_at": "2026-07-02T10:01:00+08:00",
+      "attachments": [
+        "demo-image://damaged-package"
+      ],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-003",
+      "channel": "douyin_research",
+      "customer_name": "测试客户C",
+      "text": "可以开电子发票吗，抬头和税号怎么给？",
+      "received_at": "2026-07-02T10:02:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-004",
+      "channel": "jd_research",
+      "customer_name": "测试客户D",
+      "text": "这个产品能不能放在户外长期暴晒？",
+      "received_at": "2026-07-02T10:03:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-005",
+      "channel": "qianniu_research",
+      "customer_name": "测试客户E",
+      "text": "这个商品有保修吗，坏了以后售后多久？",
+      "received_at": "2026-07-02T10:04:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-006",
+      "channel": "pdd_research",
+      "customer_name": "测试客户F",
+      "text": "能不能再便宜一点，给我最低价我马上拍。",
+      "received_at": "2026-07-02T10:05:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-007",
+      "channel": "douyin_research",
+      "customer_name": "测试客户G",
+      "text": "我已经等三天了还没发货，再不处理我就平台介入。",
+      "received_at": "2026-07-02T10:06:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-008",
+      "channel": "jd_research",
+      "customer_name": "测试客户H",
+      "text": "现在有没有现货？我今天拍明天能到吗？",
+      "received_at": "2026-07-02T10:07:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-009",
+      "channel": "qianniu_research",
+      "customer_name": "测试客户I",
+      "text": "发票可以开公司抬头吗？税号在哪里填？",
+      "received_at": "2026-07-02T10:08:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-010",
+      "channel": "pdd_research",
+      "customer_name": "测试客户J",
+      "text": "我拍了照片，收到的外包装破损，里面也有划痕，怎么售后？",
+      "received_at": "2026-07-02T10:09:00+08:00",
+      "attachments": [
+        "demo-image://scratched-item"
+      ],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-011",
+      "channel": "douyin_research",
+      "customer_name": "测试客户K",
+      "text": "你们有没有安装教程？我看商品页没找到。",
+      "received_at": "2026-07-02T10:10:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    },
+    {
+      "message_id": "demo-012",
+      "channel": "jd_research",
+      "customer_name": "测试客户L",
+      "text": "这个材料会不会对人身安全有影响？家里有小孩能用吗？",
+      "received_at": "2026-07-02T10:11:00+08:00",
+      "attachments": [],
+      "metadata": {
+        "store": "demo-store"
+      }
+    }
+  ]
+}

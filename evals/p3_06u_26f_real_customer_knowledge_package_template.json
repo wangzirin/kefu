@@ -1,0 +1,110 @@
+{
+  "template_version": "p3_06u_26f_real_customer_knowledge_package_v1",
+  "intended_case_count_min": 50,
+  "intended_case_count_max": 100,
+  "privacy_boundary": {
+    "requires_desensitization": true,
+    "forbidden_raw_fields": ["phone", "email", "id_card", "address", "order_id", "contract_no", "platform_nickname"],
+    "external_write_performed": false,
+    "provider_call_performed": false
+  },
+  "required_case_fields": [
+    "external_case_id",
+    "source_channel",
+    "source_category",
+    "customer_question",
+    "expected_answer",
+    "business_object",
+    "must_include",
+    "must_not_include",
+    "handoff_expected",
+    "risk_tags",
+    "source_reference"
+  ],
+  "documents": [
+    {
+      "title": "产品与服务范围说明",
+      "source_uri": "internal://docs/p3/product-scope-v1",
+      "owner": "项目负责人",
+      "version": "v1",
+      "applies_to_channels": ["web_widget", "wecom", "official_account"],
+      "review_required_before_publish": true,
+      "tags": ["产品范围", "试点", "坐席工作台"],
+      "chunk_size": 1600,
+      "chunk_overlap": 120,
+      "raw_text": "# 产品与服务范围说明\n\n说明系统能做什么 不能做什么 入门试点 标准运营 企业增强之间的能力边界。低风险常见问题可以进入 AI 回复预案 高风险问题必须转人工。不得承诺完全替代人工 保证转化 保证不出错或绕过平台规则。"
+    },
+    {
+      "title": "套餐价格与商务规则",
+      "source_uri": "internal://docs/p3/pricing-package-v1",
+      "owner": "商务负责人",
+      "version": "v1",
+      "applies_to_channels": ["web_widget", "wecom", "douyin", "taobao"],
+      "review_required_before_publish": true,
+      "tags": ["报价", "套餐", "模型成本"],
+      "chunk_size": 1600,
+      "chunk_overlap": 120,
+      "raw_text": "# 套餐价格与商务规则\n\n报价以正式报价单 合同条款 渠道数量 知识库规模 坐席数量 交付范围 部署方式和模型调用成本为准。折扣 升级抵扣 试点优惠和商务让步必须由商务确认 不由机器人直接承诺。"
+    },
+    {
+      "title": "交付部署与试点流程",
+      "source_uri": "internal://docs/p3/delivery-deployment-v1",
+      "owner": "交付负责人",
+      "version": "v1",
+      "applies_to_channels": ["web_widget", "wecom", "official_account"],
+      "review_required_before_publish": true,
+      "tags": ["交付", "部署", "试点"],
+      "chunk_size": 1600,
+      "chunk_overlap": 120,
+      "raw_text": "# 交付部署与试点流程\n\n试点材料至少包括 50 到 100 条脱敏客户问题 对应知识来源 风险等级 人审预期 禁用话术 期望引用和人工标注。真实渠道接入前需要官方账号 回调域名 Token EncodingAESKey AppSecret IP 白名单 sender adapter dry-run 告警和回滚方案。"
+    },
+    {
+      "title": "售后退款与服务变更规则",
+      "source_uri": "internal://docs/p3/support-refund-v1",
+      "owner": "售后负责人",
+      "version": "v1",
+      "applies_to_channels": ["web_widget", "wecom", "jd", "taobao"],
+      "review_required_before_publish": true,
+      "tags": ["售后", "退款", "服务变更"],
+      "chunk_size": 1600,
+      "chunk_overlap": 120,
+      "raw_text": "# 售后退款与服务变更规则\n\n退款 暂停 套餐变更 模型切换和交付延期需要结合合同条款 已使用权益 试点范围 服务记录和故障证据判断。机器人可以收集事实和引用政策 不能直接承诺无条件退款 固定补偿或全部责任归属。"
+    },
+    {
+      "title": "账号权限发票与数据安全规范",
+      "source_uri": "internal://docs/p3/account-invoice-security-v1",
+      "owner": "安全与财务负责人",
+      "version": "v1",
+      "applies_to_channels": ["web_widget", "wecom", "xiaohongshu"],
+      "review_required_before_publish": true,
+      "tags": ["账号", "权限", "发票", "隐私"],
+      "chunk_size": 1600,
+      "chunk_overlap": 120,
+      "raw_text": "# 账号权限发票与数据安全规范\n\n多门店 多品牌 多团队场景需要按租户 门店 角色 团队和会话范围控制权限。聊天记录 客户资料 平台昵称 导出文件和模型调用样本都可能包含敏感信息。普通坐席不应看到跨门店数据 后台密钥 全量客户资料或原始评测题库。"
+    },
+    {
+      "title": "官方渠道接入与平台边界",
+      "source_uri": "internal://docs/p3/channel-compliance-v1",
+      "owner": "渠道负责人",
+      "version": "v1",
+      "applies_to_channels": ["wecom", "official_account", "douyin", "xiaohongshu", "taobao", "jd", "pinduoduo"],
+      "review_required_before_publish": true,
+      "tags": ["渠道", "平台规则", "官方授权"],
+      "chunk_size": 1600,
+      "chunk_overlap": 120,
+      "raw_text": "# 官方渠道接入与平台边界\n\n企业微信 微信公众号 微信客服 抖音 小红书 淘宝 京东 拼多多等平台接入必须使用官方 API 开放平台 服务商授权或平台允许的客服工具。不得使用个人号外挂 Hook 群控 模拟点击 绕过风控 未授权插件或商家后台 RPA 代发。"
+    },
+    {
+      "title": "高风险投诉与法务审核规范",
+      "source_uri": "internal://docs/p3/risk-legal-v1",
+      "owner": "法务与负责人",
+      "version": "v1",
+      "applies_to_channels": ["web_widget", "wecom", "official_account", "douyin", "taobao", "jd"],
+      "review_required_before_publish": true,
+      "tags": ["高风险", "投诉", "法务"],
+      "chunk_size": 1600,
+      "chunk_overlap": 120,
+      "raw_text": "# 高风险投诉与法务审核规范\n\n高风险问题包括赔付 退款争议 损失责任 合同条款 转化率保证 竞品法律评价 平台违规判断 客户数据导出 删除审计记录 舆情曝光和监管相关问题。这类问题必须进入人工审核 AI 只能辅助整理事实 引用已有政策和提示缺少材料。"
+    }
+  ]
+}

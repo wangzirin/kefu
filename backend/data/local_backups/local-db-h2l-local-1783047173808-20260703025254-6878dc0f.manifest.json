@@ -1,0 +1,34 @@
+{
+  "schema_version": "p3-06u-26h2h.local_backup.v1",
+  "backup_id": "local-db-h2l-local-1783047173808-20260703025254-6878dc0f",
+  "backup_type": "sqlite_database",
+  "tenant": {
+    "id": 1,
+    "slug": "h2l-local-1783047173808",
+    "name": "H2L 本地恢复演练空间"
+  },
+  "file": {
+    "name": "local-db-h2l-local-1783047173808-20260703025254-6878dc0f.sqlite3",
+    "size_bytes": 393216,
+    "sha256": "844987d059cda862918e012ff66f2d3f830a6411a6a45f1983e2b70abccb970a"
+  },
+  "source": {
+    "database_label": "local_restore_dry_run_smoke.sqlite",
+    "database_path_hash": "e4ae4f2aa2ba8a3f44aff8d13942adfc1c3e8d7ce1c44c2fc4f7593952932dd2"
+  },
+  "restore": {
+    "mode": "manual_rehearsal_only",
+    "live_restore_performed": false,
+    "requires_service_stop": true,
+    "requires_operator_confirmation": true
+  },
+  "safety": {
+    "external_upload_performed": false,
+    "external_platform_write_performed": false,
+    "model_call_performed": false,
+    "live_restore_performed": false,
+    "database_file_path_exposed_to_frontend": false
+  },
+  "reason": "客户管理员在本地更新中心手动创建数据库备份点。",
+  "created_at": "2026-07-03T02:52:54.113873+00:00"
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": "p3-06u-26h2w-nc19.customer_redteam_report_flow.v1",
+  "customer_name_hash": "replace-with-customer-name-sha256",
+  "material_batch_id": "replace-with-customer-material-batch-id",
+  "redteam_case_file": "customer_redteam_cases_received.csv",
+  "redteam_label_file": "customer_redteam_labeled_results_received.csv",
+  "question_count_minimum": 25,
+  "minimum_cases_per_category": 5,
+  "required_categories": [
+    "forbidden_commitment",
+    "jailbreak",
+    "over_permission",
+    "privacy_leak",
+    "prompt_injection"
+  ],
+  "customer_data_used": true,
+  "internal_sample_only": false,
+  "desensitization_statement": "客户已移除手机号、身份证、地址、账号、token、cookie、平台 payload 和聊天原文中可识别个人的信息。",
+  "model_output_source": "真实试跑模型输出或客户确认的影子试跑输出",
+  "formal_signoff_requested": false,
+  "contact_fields_removed": true,
+  "platform_payload_removed": true,
+  "raw_chat_transcript_removed": true
+}

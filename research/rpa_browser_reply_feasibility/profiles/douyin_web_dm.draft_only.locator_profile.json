@@ -1,0 +1,169 @@
+{
+  "schema_version": "rpa_locator_profile.v1",
+  "profile_id": "douyin_web_dm_draft_only_research_v1",
+  "platform": "douyin_web",
+  "page_kind": "personal_web_dm_popup",
+  "research_stage": "P3-06U-12H",
+  "status": "draft_profile_only",
+  "source_basis": "operator_visible_page_shape_only",
+  "not_equivalent_to": [
+    "douyin_shop_fengge",
+    "douyin_enterprise_im",
+    "douyin_open_platform_api",
+    "official_customer_service_connector",
+    "unattended_auto_reply"
+  ],
+  "target_scope": {
+    "allowed_url_patterns": [
+      "https://www.douyin.com/user/self*",
+      "https://douyin.com/user/self*"
+    ],
+    "expected_surface": "A personal web direct-message popup with a conversation list on the left and the active chat area on the right.",
+    "allowed_use": [
+      "verify whether an already visible personal DM editor can be located",
+      "fill a temporary draft into the visible reply editor",
+      "clear the draft after the probe",
+      "record sanitized locator behavior without storing private messages"
+    ],
+    "disallowed_use": [
+      "click_send",
+      "press_enter_to_send",
+      "bulk_message",
+      "scrape_private_messages",
+      "persist_private_conversation",
+      "read_cookie_token_or_localstorage",
+      "bypass_platform_rate_limit_or_risk_control"
+    ]
+  },
+  "delivery_policy": {
+    "delivery_mode": "fill_draft_only",
+    "send_allowed": false,
+    "auto_send_allowed": false,
+    "must_not_click_send": true,
+    "press_enter_blocked": true,
+    "auto_clear_draft_required": true,
+    "clear_draft_after_probe": true,
+    "human_visible_operation_required": true,
+    "operator_confirmation_required_before_any_real_page_probe": true,
+    "raw_private_data_persistence_allowed": false,
+    "capture_screenshot_allowed": false,
+    "store_cookie_token_localstorage_allowed": false
+  },
+  "adapter_candidates": [
+    "accessibility_browser_adapter"
+  ],
+  "cdp_compatibility": {
+    "status": "not_verified_for_current_logged_in_page",
+    "reason": "The already logged-in personal Chrome page may not be exposed through the current CDP debugging profile."
+  },
+  "locator_hints": {
+    "page_identity": [
+      {
+        "name": "douyin_self_page",
+        "kind": "url_contains",
+        "hint": "douyin.com/user/self"
+      },
+      {
+        "name": "private_message_popup_visible",
+        "kind": "visible_text_or_accessibility_region",
+        "hint": "私信"
+      }
+    ],
+    "conversation_list": [
+      {
+        "name": "dm_conversation_list",
+        "kind": "accessibility_region",
+        "hint": "The narrow list area inside the private-message popup, left of the active chat area.",
+        "allowed_capture": "structure_only"
+      }
+    ],
+    "active_chat_area": [
+      {
+        "name": "dm_active_chat_panel",
+        "kind": "accessibility_region",
+        "hint": "The larger right-side chat panel inside the popup.",
+        "allowed_capture": "structure_only"
+      }
+    ],
+    "reply_editor": [
+      {
+        "name": "dm_reply_editor",
+        "kind": "textarea_or_contenteditable",
+        "placeholder_or_accessible_name": "发送消息",
+        "action": "focus_and_fill_draft",
+        "draft_only": true
+      }
+    ],
+    "send_control": [
+      {
+        "name": "dm_send_button",
+        "kind": "button_or_icon_button_near_editor",
+        "visual_hint": "up-arrow or send control at the right side of the editor",
+        "must_not_click_in_draft_only": true
+      }
+    ],
+    "clear_draft": [
+      {
+        "name": "clear_visible_editor_draft",
+        "kind": "keyboard_or_editor_action",
+        "steps": [
+          "focus reply editor",
+          "select all visible draft text inside the editor",
+          "delete selected draft text",
+          "verify editor is empty",
+          "do not press Enter"
+        ]
+      }
+    ]
+  },
+  "observation_contract": {
+    "allowed_to_record": [
+      "whether the target page was visible",
+      "whether the editor was located",
+      "whether a temporary draft was inserted",
+      "whether the temporary draft was cleared",
+      "whether any send action was attempted"
+    ],
+    "forbidden_observations": [
+      "real conversation names",
+      "real group names",
+      "raw message text",
+      "avatar urls",
+      "video titles or cards",
+      "unread counters",
+      "account ids",
+      "phone numbers",
+      "addresses",
+      "orders",
+      "payment information",
+      "cookies",
+      "tokens",
+      "localStorage",
+      "sessionStorage",
+      "screenshots of the private page",
+      "raw accessibility tree dumps"
+    ],
+    "evidence_required": [
+      "operator confirms draft appeared in the visible editor",
+      "operator confirms draft was cleared",
+      "script or operator record confirms send_attempted=false"
+    ]
+  },
+  "fallback_behavior": {
+    "if_editor_not_found": "stop_without_action",
+    "if_multiple_editors_found": "stop_and_request_operator_selection",
+    "if_send_button_is_focused": "blur_or_stop_without_action",
+    "if_platform_shows_risk_prompt": "stop_without_action",
+    "if_page_changes_layout": "stop_and_update_profile"
+  },
+  "business_interpretation": {
+    "valid_conclusion_if_probe_passes": "This personal web DM surface can support an operator-mediated draft-only RPA research probe.",
+    "invalid_conclusions": [
+      "Douyin shop customer service is connected",
+      "Douyin enterprise customer service is connected",
+      "official automatic reply is available",
+      "unattended sending is safe",
+      "high-concurrency customer service is solved"
+    ]
+  }
+}

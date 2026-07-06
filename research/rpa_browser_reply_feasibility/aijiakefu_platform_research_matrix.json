@@ -1,0 +1,104 @@
+{
+  "schema_version": "aijiakefu_platform_research_matrix.v1",
+  "source_repo": "https://github.com/AIjiaKeFu/AI-Customer-Service",
+  "source_local_path": "/Users/ericlee/Desktop/Workspace/Project_012_智能客服方案研究/assets/open_source_references/AI-Customer-Service",
+  "release_asset_sha256": "785d2a2cefc914a9362b89a632a02db95eed5646a4590a1045329acd01395896",
+  "source_finding": "The GitHub repository contains README only. The release asset is a Windows RAR package with GUI executables, WebDriver/WindowsDriver, platform icons, image assets, and configuration templates.",
+  "license_boundary": "README says AGPL-3.0 and commercial use requires contacting the author. No AGPL code is copied into our product.",
+  "global_delivery_policy": {
+    "mode": "internal_research",
+    "delivery_mode": "fill_draft_only",
+    "send_allowed": false,
+    "auto_send_allowed": false,
+    "external_write_enabled": false,
+    "cookie_token_reuse_allowed": false,
+    "private_protocol_allowed": false,
+    "anti_detection_or_evasion_allowed": false,
+    "operator_visible_test_account_required": true
+  },
+  "platforms": [
+    {
+      "platform_id": "douyin",
+      "display_name": "抖音私信 / 抖店飞鸽",
+      "aijiakefu_claim": [
+        "README claims support for 抖音私信",
+        "README claims support for 抖店"
+      ],
+      "release_evidence": [
+        "Static/ProgramImage/douyin.png",
+        "Static/ProgramImage/doudian.png",
+        "Tool/config.yaml contains individual.抖音 and individual.抖店",
+        "Tool/config.json contains 抖店多开1-8"
+      ],
+      "official_route": "Douyin Open Platform private-message scopes, enterprise IM webhooks, or Douyin shop/Feige official/service-provider permissions after account authorization.",
+      "rpa_research_route": "Visible browser or desktop customer-service workspace, operator already logged in, draft-only fill and immediate clear if required.",
+      "not_proven": [
+        "douyin_shop_fengge_send_api_available",
+        "enterprise_im_scope_approved",
+        "unattended_send_allowed",
+        "high_concurrency_stability"
+      ]
+    },
+    {
+      "platform_id": "qianniu",
+      "display_name": "淘宝 / 天猫 / 千牛",
+      "aijiakefu_claim": [
+        "README claims support for 千牛",
+        "README demo link title says 淘宝天猫千牛AI自动回复"
+      ],
+      "release_evidence": [
+        "Static/ProgramImage/qianniu.png",
+        "Static/imageqianniu contains image assets",
+        "Tool/config.json contains 千牛, 千牛1-4 and customer_service_name fields"
+      ],
+      "official_route": "Taobao customer-service panel plugin, service market app, or customer-service tool permissions after platform review.",
+      "rpa_research_route": "Qianniu desktop/web customer-service surface, operator already logged in, draft-only fill.",
+      "not_proven": [
+        "wangwang_generic_send_api_available",
+        "service_market_permission_approved",
+        "desktop_qianniu_rpa_stability",
+        "unattended_send_allowed"
+      ]
+    },
+    {
+      "platform_id": "jingmai",
+      "display_name": "京东 / 京麦 / 咚咚",
+      "aijiakefu_claim": [
+        "README claims support for 京麦",
+        "README demo link title says 京东京麦咚咚"
+      ],
+      "release_evidence": [
+        "Static/ProgramImage/jingmai.png",
+        "Tool/config.json contains 京东 and 京东多开1-8"
+      ],
+      "official_route": "JD JOS customer robot/customer plugin API packages after shop authorization and permission review.",
+      "rpa_research_route": "Jingmai/Dongdong visible customer-service surface, operator already logged in, draft-only fill.",
+      "not_proven": [
+        "jos_customer_robot_permission_approved",
+        "dongdong_generic_send_api_available",
+        "unattended_send_allowed",
+        "high_concurrency_stability"
+      ]
+    },
+    {
+      "platform_id": "pdd",
+      "display_name": "拼多多 / 多多客服",
+      "aijiakefu_claim": [
+        "README claims support for 拼多多",
+        "README demo link title says 拼多多"
+      ],
+      "release_evidence": [
+        "Static/ProgramImage/pdd.png",
+        "Tool/config.json contains 拼多多 and 拼多多多开1-8"
+      ],
+      "official_route": "Pinduoduo Open Platform or service-provider permission confirmation. Public generic customer-service send API is not proven by this package.",
+      "rpa_research_route": "PDD merchant customer-service workspace, operator already logged in, draft-only fill.",
+      "not_proven": [
+        "public_generic_customer_service_send_api_available",
+        "merchant_service_permission_approved",
+        "unattended_send_allowed",
+        "high_concurrency_stability"
+      ]
+    }
+  ]
+}

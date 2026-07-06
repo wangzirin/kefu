@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RPA 客服工作台可行性 Mock</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --line: #d9e2ef;
+        --text: #172033;
+        --muted: #66758a;
+        --blue: #1f6feb;
+        --green: #138a5b;
+        --orange: #b45309;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: 330px minmax(0, 1fr);
+        gap: 16px;
+        min-height: 100vh;
+        padding: 22px;
+      }
+
+      aside,
+      section {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        box-shadow: 0 10px 28px rgba(23, 32, 51, 0.06);
+      }
+
+      aside {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        overflow: hidden;
+      }
+
+      header {
+        border-bottom: 1px solid var(--line);
+        padding: 18px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 20px;
+      }
+
+      h2 {
+        font-size: 24px;
+      }
+
+      small,
+      p {
+        color: var(--muted);
+      }
+
+      .session-list {
+        display: grid;
+        align-content: start;
+        gap: 10px;
+        overflow: auto;
+        padding: 14px;
+      }
+
+      .session {
+        display: grid;
+        gap: 8px;
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fbfdff;
+        padding: 12px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .session.is-active {
+        border-color: var(--blue);
+        background: #eef5ff;
+      }
+
+      .session strong {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .badge {
+        border-radius: 999px;
+        background: #e8f2ff;
+        color: var(--blue);
+        padding: 3px 8px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .chat {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        min-height: calc(100vh - 44px);
+        overflow: hidden;
+      }
+
+      .chat-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        padding: 18px 20px;
+      }
+
+      .chat-head div {
+        display: grid;
+        gap: 5px;
+      }
+
+      .status {
+        border-radius: 10px;
+        background: #f1f5f9;
+        color: var(--muted);
+        padding: 7px 10px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .status.sent {
+        background: #eaf8f1;
+        color: var(--green);
+      }
+
+      .messages {
+        display: grid;
+        align-content: start;
+        gap: 12px;
+        overflow: auto;
+        padding: 18px 20px;
+      }
+
+      .message {
+        max-width: 780px;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        background: #ffffff;
+        padding: 12px 14px;
+      }
+
+      .message.customer {
+        justify-self: start;
+      }
+
+      .message.operator,
+      .message.rpa {
+        justify-self: end;
+        border-color: #bcd3fb;
+        background: #edf5ff;
+      }
+
+      .message strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .composer {
+        display: grid;
+        gap: 10px;
+        border-top: 1px solid var(--line);
+        padding: 16px 20px 18px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 118px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        color: var(--text);
+        font: inherit;
+      }
+
+      .composer-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+      }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #ffffff;
+        color: var(--text);
+        padding: 9px 14px;
+        font: inherit;
+        font-weight: 850;
+        cursor: pointer;
+      }
+
+      button.primary {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: #ffffff;
+      }
+
+      .warning {
+        color: var(--orange);
+        font-weight: 850;
+      }
+    </style>
+  </head>
+  <body data-rpa-platform="mock-customer-service">
+    <main>
+      <aside aria-label="会话列表">
+        <header>
+          <h1>类平台客服工作台</h1>
+          <small>本页只用于 RPA 技术研究，不连接真实平台。</small>
+        </header>
+        <div class="session-list">
+          <button
+            type="button"
+            class="session is-active"
+            data-rpa="session"
+            data-session-id="mock-001"
+            data-channel="pdd-mock"
+            data-unread="true"
+          >
+            <strong><span data-rpa="session-customer">李女士</span> <span class="badge" data-rpa="session-channel-badge">拼多多样式</span></strong>
+            <small data-rpa="session-preview">我下单后多久发货？节假日会延迟吗？</small>
+          </button>
+          <button
+            type="button"
+            class="session"
+            data-rpa="session"
+            data-session-id="mock-002"
+            data-channel="douyin-mock"
+            data-unread="false"
+          >
+            <strong>王先生 <span class="badge">抖店样式</span></strong>
+            <small>你们能不能保证最低价？</small>
+          </button>
+        </div>
+      </aside>
+
+      <section class="chat" aria-label="当前会话">
+        <div class="chat-head">
+          <div>
+            <span class="badge" data-rpa="active-channel">拼多多样式客服</span>
+            <h2 data-rpa="active-customer-name">李女士</h2>
+            <p data-rpa="mock-context">测试订单：MOCK-20260702-001 · 仅用于本地实验</p>
+          </div>
+          <span class="status" data-rpa="send-state">等待 RPA 填入草稿</span>
+        </div>
+
+        <div class="messages" data-rpa="message-stream">
+          <article class="message customer">
+            <strong>客户</strong>
+            <p data-rpa="latest-inbound-message">我下单后多久发货？节假日会延迟吗？</p>
+          </article>
+          <article class="message operator">
+            <strong>人工提示</strong>
+            <p>请先确认是否需要人工审核，再发送给客户。</p>
+          </article>
+        </div>
+
+        <div class="composer">
+          <label>
+            <strong>回复框</strong>
+            <textarea data-rpa="reply-editor" placeholder="RPA 会把草稿填到这里；真实平台实验时默认不自动发送。"></textarea>
+          </label>
+          <div class="composer-row">
+            <small class="warning">本地 mock 可测试点击发送；真实平台必须人工确认。</small>
+            <button type="button" class="primary" data-rpa="send-button">发送</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const platformScenarios = {
+        pdd: {
+          channel: "拼多多样式客服",
+          badge: "拼多多样式",
+          customer: "李女士",
+          question: "我下单后多久发货？节假日会延迟吗？",
+          context: "测试订单：PDD-MOCK-20260702-001 · 仅用于本地实验"
+        },
+        douyin: {
+          channel: "抖音私信样式客服",
+          badge: "抖音样式",
+          customer: "王先生",
+          question: "这个课程现在报名有什么赠品？能不能先发我介绍？",
+          context: "测试线索：DY-MOCK-20260702-001 · 仅用于本地实验"
+        },
+        qianniu: {
+          channel: "淘宝千牛样式客服",
+          badge: "千牛样式",
+          customer: "陈同学",
+          question: "这款是不是现货？今天拍下什么时候可以发出？",
+          context: "测试订单：QN-MOCK-20260702-001 · 仅用于本地实验"
+        },
+        jingmai: {
+          channel: "京东京麦样式客服",
+          badge: "京麦样式",
+          customer: "赵女士",
+          question: "我收到的商品外包装有破损，需要怎么处理售后？",
+          context: "测试订单：JD-MOCK-20260702-001 · 仅用于本地实验"
+        }
+      };
+
+      function applyScenario() {
+        const platform = new URLSearchParams(location.search).get("platform") || "pdd";
+        const scenario = platformScenarios[platform] || platformScenarios.pdd;
+        const firstSession = document.querySelector('[data-rpa="session"]');
+        if (!firstSession) return;
+        firstSession.dataset.channel = scenario.channel;
+        firstSession.querySelector('[data-rpa="session-customer"]').textContent = scenario.customer;
+        firstSession.querySelector('[data-rpa="session-channel-badge"]').textContent = scenario.badge;
+        firstSession.querySelector('[data-rpa="session-preview"]').textContent = scenario.question;
+        document.querySelector('[data-rpa="active-customer-name"]').textContent = scenario.customer;
+        document.querySelector('[data-rpa="active-channel"]').textContent = scenario.channel;
+        document.querySelector('[data-rpa="latest-inbound-message"]').textContent = scenario.question;
+        document.querySelector('[data-rpa="mock-context"]').textContent = scenario.context;
+      }
+
+      applyScenario();
+
+      const sessions = Array.from(document.querySelectorAll('[data-rpa="session"]'));
+      sessions.forEach((session) => {
+        session.addEventListener("click", () => {
+          sessions.forEach((item) => item.classList.remove("is-active"));
+          session.classList.add("is-active");
+          document.querySelector('[data-rpa="active-customer-name"]').textContent = session.querySelector('[data-rpa="session-customer"]')?.textContent?.trim() || session.querySelector("strong").childNodes[0].textContent.trim();
+          document.querySelector('[data-rpa="active-channel"]').textContent = session.dataset.channel || "mock";
+          document.querySelector('[data-rpa="latest-inbound-message"]').textContent = session.querySelector("small").textContent.trim();
+          document.querySelector('[data-rpa="reply-editor"]').value = "";
+          document.querySelector('[data-rpa="send-state"]').textContent = "等待 RPA 填入草稿";
+          document.querySelector('[data-rpa="send-state"]').classList.remove("sent");
+        });
+      });
+
+      document.querySelector('[data-rpa="send-button"]').addEventListener("click", () => {
+        const editor = document.querySelector('[data-rpa="reply-editor"]');
+        const state = document.querySelector('[data-rpa="send-state"]');
+        const text = editor.value.trim();
+        if (!text) {
+          state.textContent = "回复框为空，未发送";
+          return;
+        }
+        const article = document.createElement("article");
+        article.className = "message rpa sent-message";
+        article.setAttribute("data-rpa", "sent-message");
+        article.innerHTML = `<strong>RPA 实验发送</strong><p></p>`;
+        article.querySelector("p").textContent = text;
+        document.querySelector('[data-rpa="message-stream"]').append(article);
+        state.textContent = "本地 mock 已发送";
+        state.classList.add("sent");
+      });
+    </script>
+  </body>
+</html>

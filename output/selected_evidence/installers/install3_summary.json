@@ -1,0 +1,132 @@
+{
+  "phase": "H2W-INSTALL3",
+  "schema_version": "p3-06u-26h2w-install3.native_app_packaging_gate.v1",
+  "status": "native_app_packaging_candidate_ready",
+  "readiness": {
+    "macos_app_wrapper_candidate_ready": true,
+    "windows_launcher_candidate_ready": true,
+    "health_check_candidate_ready": true,
+    "upgrade_backup_preflight_ready": true,
+    "installer_version_file_ready": true,
+    "installer_logs_policy_ready": true,
+    "signed_dmg_exe_ready": false,
+    "desktop_installer_ready": false,
+    "native_installer_ready": false,
+    "real_platform_send_ready": false,
+    "silent_update_ready": false,
+    "remote_control_ready": false
+  },
+  "checks": {
+    "install2": {
+      "path": "output/p3_06u_26h2w_install2_native_installer_readiness/summary.json",
+      "expected_status": "native_wrapper_candidate_ready",
+      "actual_status": "native_wrapper_candidate_ready",
+      "passed": true
+    },
+    "pilot5": {
+      "path": "output/p3_06u_26h2w_pilot5_installer_next_fork_decision/summary.json",
+      "expected_status": "installer_next_fork_decision_ready",
+      "actual_status": "installer_next_fork_decision_ready",
+      "passed": true
+    },
+    "version": {
+      "version_file_exists": true,
+      "schema_version_present": true,
+      "phase_is_install3": true,
+      "package_version_present": true,
+      "signed_dmg_exe_ready_false": true,
+      "desktop_installer_ready_false": true,
+      "native_installer_ready_false": true,
+      "real_platform_send_ready_false": true,
+      "silent_update_ready_false": true,
+      "remote_control_ready_false": true
+    },
+    "macos": {
+      "app_dir_exists": true,
+      "app_exec_exists": true,
+      "app_exec_bash_syntax_ok": true,
+      "app_exec_calls_command_launcher": true,
+      "app_exec_does_not_create_customer_env": true,
+      "health_script_exists": true,
+      "health_script_bash_syntax_ok": true,
+      "health_checks_docker": true,
+      "health_checks_backend_health_url": true,
+      "health_blocks_external_write": true,
+      "health_blocks_worker": true,
+      "health_blocks_dev_bootstrap": true,
+      "upgrade_preflight_exists": true,
+      "upgrade_preflight_bash_syntax_ok": true,
+      "upgrade_writes_manifest": true,
+      "upgrade_does_not_export_database": true,
+      "upgrade_requires_app_backup_next": true,
+      "info_plist_exists": true,
+      "bundle_identifier_present": true,
+      "bundle_executable_matches": true,
+      "bundle_short_version_present": true,
+      "bundle_package_type_app": true
+    },
+    "windows": {
+      "health_script_exists": true,
+      "health_checks_docker": true,
+      "health_checks_backend_health_url": true,
+      "health_blocks_external_write": true,
+      "health_blocks_worker": true,
+      "health_blocks_dev_bootstrap": true,
+      "upgrade_preflight_exists": true,
+      "upgrade_writes_manifest": true,
+      "upgrade_does_not_export_database": true,
+      "upgrade_requires_app_backup_next": true,
+      "upgrade_does_not_copy_customer_env": true
+    },
+    "logs": {
+      "logs_dir_exists": true,
+      "logs_gitkeep_exists": true,
+      "logs_readme_exists": true,
+      "logs_readme_blocks_secrets": true,
+      "logs_readme_allows_non_sensitive_evidence": true
+    }
+  },
+  "blockers": [],
+  "warnings": [],
+  "evidence": {
+    "summary_json": {
+      "path": "output/p3_06u_26h2w_install3_native_app_packaging_gate/summary.json"
+    },
+    "markdown": {
+      "path": "docs/P3-06U-26H2W_INSTALL3_NATIVE_APP_PACKAGING_GATE.md"
+    },
+    "version_file": {
+      "path": "installers/VERSION.json",
+      "present": true
+    },
+    "macos_app": {
+      "path": "installers/macos/WanfaCustomerService.app",
+      "present": true
+    },
+    "windows_health": {
+      "path": "installers/windows/HealthCheck-WanfaCustomerService.ps1",
+      "present": true
+    }
+  },
+  "boundaries": {
+    "signed_dmg_exe_ready": false,
+    "desktop_installer_ready": false,
+    "native_installer_ready": false,
+    "real_platform_send_performed": false,
+    "trusted_inbound_worker_enabled_by_default": false,
+    "customer_env_created_or_modified": false,
+    "secret_written_by_installer": false,
+    "default_admin_password_created": false,
+    "remote_control_performed": false,
+    "silent_update_performed": false,
+    "database_backup_exported_by_preflight_script": false
+  },
+  "not_ready_for": [
+    "Apple/Windows 代码签名",
+    "正式 dmg/exe 安装包",
+    "静默安装或静默更新",
+    "自动填写客户本地密码或模型凭据",
+    "真实平台外发",
+    "生产 SLA"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": "p3-06u-26h2w-data2.real_customer_material_readiness.v1",
+  "customer_alias": "请填写客户简称或项目代号，不写真实个人姓名",
+  "provided_by_role": "业务负责人/运营负责人/售后负责人",
+  "provided_at": "YYYY-MM-DD",
+  "desensitization_owner_role": "负责脱敏的人或角色",
+  "desensitization_statement": "已移除手机号、邮箱、身份证号、订单号、平台 payload、密钥、token、密码、真实聊天原文中的可识别个人信息。",
+  "customer_data_used": true,
+  "files": {
+    "materials_csv": "customer_materials_received.csv",
+    "trial_questions_csv": "customer_trial_questions_received.csv"
+  },
+  "expected_question_count": "50-100",
+  "real_platform_send_enabled": false,
+  "formal_customer_signoff_ready": false
+}

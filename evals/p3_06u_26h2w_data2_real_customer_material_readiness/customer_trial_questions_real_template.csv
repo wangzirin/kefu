@@ -1,0 +1,2 @@
+question_id,question,expected_answer,expected_action,source_uri,business_object,desensitization_note
+Q-001,脱敏后的客户问题,业务负责人确认过的期望答案,answer_with_reference,customer-doc://example/product-introduction,示例产品或服务名称,示例行，正式回传前请删除。

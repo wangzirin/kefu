@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+EXEC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_CONTENTS_DIR="$(cd "$EXEC_DIR/.." && pwd)"
+APP_DIR="$(cd "$APP_CONTENTS_DIR/.." && pwd)"
+MACOS_INSTALLER_DIR="$(cd "$APP_DIR/.." && pwd)"
+LAUNCHER="$MACOS_INSTALLER_DIR/WanfaCustomerService.command"
+
+if [[ ! -x "$LAUNCHER" ]]; then
+  echo "启动被阻断：未找到 macOS 启动脚本 $LAUNCHER" >&2
+  exit 1
+fi
+
+exec "$LAUNCHER" "$@"

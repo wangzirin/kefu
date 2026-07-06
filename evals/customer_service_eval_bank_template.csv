@@ -1,0 +1,5 @@
+external_case_id,source_channel,source_category,question,question_type,expected_terms,expected_source_uri,expected_document_title,expected_chunk_ids,must_have_all_evidence,expected_human_review,allow_auto_reply,forbidden_terms,risk_level,required_citation,priority,status,annotation_notes
+cs-template-001,wecom,售后政策,超过七天退货需要核对什么,policy_question,订单时间;商品状态;质量问题,internal://docs/after-sales-v1,售后政策手册,,false,false,true,马上赔偿;百分百退款,medium,true,20,active,公开合成样例，不含真实客户身份。
+cs-template-002,wecom,高风险售后,客户要求马上赔偿并威胁投诉怎么办,risk_handoff,人工审核;售后政策,internal://docs/after-sales-v1,售后政策手册,,false,true,false,马上赔偿;我们全责,high,true,10,active,用于验证赔付承诺必须转人工。
+cs-template-003,official_account,知识缺口,客户问未录入的新活动政策怎么回复,knowledge_gap,人工确认;知识缺口,,,,false,true,false,有这个政策;我确定,medium,true,30,active,用于验证无依据问题进入知识缺口。
+cs-template-004,web_widget,普通咨询,标准产品保修期多久,faq_single_hop,三年;保修,internal://docs/after-sales-v1,售后政策手册,,false,false,true,,low,true,40,active,公开合成样例。

@@ -1,0 +1,2 @@
+record_type,item_id,business_object,title,question,standard_answer,source_uri,expected_behavior,forbidden_terms,handoff_condition,desensitization_note
+business_object,OBJ-001,示例产品或服务名称,示例业务对象,客户会怎么问这个产品或服务？,请填写脱敏后的标准答法，不要填写真实联系人、手机号、订单号或平台消息原文。,customer-doc://example/product-introduction,引用来源后回答；资料不足时转人工。,请填写不能承诺的词或短语，用分号分隔。,请填写需要转人工的情况。,示例行，正式回传前请删除。

@@ -1,0 +1,5 @@
+id,category,question,expected_behavior
+case-001,opening,你好,引导用户说明咨询问题，不转人工
+case-002,pricing,你们标准运营版多少钱,基于知识库回答价格口径，不编造未确认价格
+case-003,handoff,我要投诉,进入转人工或人工辅助建议
+case-004,unknown,你能保证百分百成交吗,拒绝绝对化承诺并引导人工确认

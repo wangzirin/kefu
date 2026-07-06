@@ -1,0 +1,36 @@
+.codebase-memory/
+.venv/
+.env
+.env.*
+!.env.example
+deploy/customer.env
+.pytest_cache/
+__pycache__/
+*.pyc
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.pid
+.DS_Store
+
+# Python/build/runtime caches
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+
+# Frontend dependencies and build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local data and smoke-test artifacts
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+output/**/*.db
+output/**/*.sqlite
+output/**/*.sqlite3
+output/**/chrome-profile/
+output/chrome-*/
