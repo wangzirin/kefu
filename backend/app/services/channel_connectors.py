@@ -10,7 +10,10 @@ from app.models import (
     ChannelAccount,
     ChannelConnector,
     ChannelDeliveryReceipt,
+    Contact,
+    Conversation,
     DeliveryFailureReview,
+    Message,
     OutboxDraft,
     OutboxSendAttempt,
     Tenant,
@@ -58,6 +61,52 @@ SENSITIVE_WEBHOOK_PAYLOAD_KEYS = (
     "app_secret",
     "encrypt",
 )
+
+
+def _resolve_website_widget_tenant(
+    db: Session,
+    *,
+    tenant_id: int | None,
+    tenant_slug: str = "",
+) -> Tenant:
+    tenant = None
+    if tenant_id is not None:
+        tenant = db.get(Tenant, tenant_id)
+    if tenant is None and tenant_slug:
+        tenant = db.scalar(select(Tenant).where(Tenant.slug == tenant_slug))
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="tenant not found")
+    return tenant
+
+
+def _find_website_widget_contact(db: Session, *, tenant_id: int, visitor_id: str) -> Contact | None:
+    clean_visitor_id = visitor_id.strip()
+    if not clean_visitor_id:
+        return None
+    return db.scalar(
+        select(Contact).where(
+            Contact.tenant_id == tenant_id,
+            Contact.wechat == f"website:{clean_visitor_id}"[:80],
+        )
+    )
+
+
+def _find_latest_website_widget_conversation(
+    db: Session,
+    *,
+    tenant_id: int,
+    contact_id: int,
+) -> Conversation | None:
+    return db.scalar(
+        select(Conversation)
+        .join(Channel, Channel.id == Conversation.channel_id)
+        .where(
+            Conversation.tenant_id == tenant_id,
+            Conversation.contact_id == contact_id,
+            Channel.type == "website",
+        )
+        .order_by(Conversation.last_message_at.desc(), Conversation.id.desc())
+    )
 
 
 def _require_channel_for_principal(db: Session, channel_id: int, principal: CurrentPrincipal) -> Channel:
@@ -786,13 +835,7 @@ def receive_website_widget_message(
     *,
     payload: WebsiteWidgetMessageCreate,
 ) -> dict:
-    tenant = None
-    if payload.tenant_id is not None:
-        tenant = db.get(Tenant, payload.tenant_id)
-    if tenant is None and payload.tenant_slug:
-        tenant = db.scalar(select(Tenant).where(Tenant.slug == payload.tenant_slug))
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="tenant not found")
+    tenant = _resolve_website_widget_tenant(db, tenant_id=payload.tenant_id, tenant_slug=payload.tenant_slug)
 
     channel = db.scalar(
         select(Channel).where(
@@ -814,6 +857,19 @@ def receive_website_widget_message(
 
     message_index = int(utc_now().timestamp() * 1000)
     visitor_id = payload.visitor_id.strip() or f"website-visitor-{message_index}"
+    existing_contact = _find_website_widget_contact(db, tenant_id=tenant.id, visitor_id=visitor_id)
+    existing_conversation = (
+        _find_latest_website_widget_conversation(db, tenant_id=tenant.id, contact_id=existing_contact.id)
+        if existing_contact is not None
+        else None
+    )
+    reopen_action = payload.reopen_action.strip()
+    if existing_conversation is not None and existing_conversation.status == "closed" and not reopen_action:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="conversation closed",
+        )
+    is_new_conversation = existing_conversation is None or existing_conversation.status == "closed"
     raw_payload = {
         "message_id": f"website-widget-{tenant.id}-{payload.component_id}-{message_index}",
         "visitor_id": visitor_id,
@@ -822,6 +878,7 @@ def receive_website_widget_message(
         "component_id": payload.component_id,
         "page_url": payload.page_url,
         "page_title": payload.page_title,
+        "reopen_action": reopen_action,
     }
     trusted_inbound = create_trusted_inbound_message_if_ready(
         db,
@@ -832,6 +889,26 @@ def receive_website_widget_message(
         external_message_id=raw_payload["message_id"],
         raw_payload=raw_payload,
     )
+    greeting_message_id = None
+    if (
+        reopen_action == "continue_chat"
+        and trusted_inbound.conversation_id is not None
+        and trusted_inbound.status == "trusted_inbound_message_created"
+    ):
+        greeting = Message(
+            conversation_id=trusted_inbound.conversation_id,
+            direction="outbound",
+            sender_type="agent",
+            content="您好，已为您重新接入客服，请问还有什么可以帮您？",
+            external_message_id=f"website-widget-greeting-{tenant.id}-{trusted_inbound.conversation_id}-{message_index}",
+            created_at=utc_now(),
+        )
+        db.add(greeting)
+        db.flush()
+        greeting_message_id = greeting.id
+        conversation = db.get(Conversation, trusted_inbound.conversation_id)
+        if conversation is not None:
+            conversation.last_message_at = greeting.created_at
     add_audit_event(
         db,
         tenant_id=tenant.id,
@@ -844,10 +921,16 @@ def receive_website_widget_message(
             "component_id": payload.component_id,
             "trusted_message_id": trusted_inbound.trusted_message_id,
             "conversation_id": trusted_inbound.conversation_id,
+            "reopen_action": reopen_action,
+            "greeting_message_id": greeting_message_id,
             "external_write": False,
         },
     )
     db.commit()
+    conversation_status = ""
+    if trusted_inbound.conversation_id is not None:
+        conversation = db.get(Conversation, trusted_inbound.conversation_id)
+        conversation_status = conversation.status if conversation is not None else ""
     return {
         "tenant_id": tenant.id,
         "channel_id": channel.id,
@@ -856,6 +939,65 @@ def receive_website_widget_message(
         "message_id": trusted_inbound.trusted_message_id,
         "status": trusted_inbound.status,
         "next_action": trusted_inbound.next_action,
+        "is_new_conversation": is_new_conversation,
+        "conversation_status": conversation_status,
+    }
+
+
+def list_website_widget_conversation_messages(
+    db: Session,
+    *,
+    tenant_id: int | None,
+    tenant_slug: str = "",
+    visitor_id: str,
+    after_id: int = 0,
+) -> dict:
+    tenant = _resolve_website_widget_tenant(db, tenant_id=tenant_id, tenant_slug=tenant_slug)
+    clean_visitor_id = visitor_id.strip()
+    if not clean_visitor_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="visitor_id required")
+
+    contact = _find_website_widget_contact(db, tenant_id=tenant.id, visitor_id=clean_visitor_id)
+    if contact is None:
+        return {
+            "tenant_id": tenant.id,
+            "channel_id": None,
+            "contact_id": None,
+            "conversation_id": None,
+            "conversation_status": "",
+            "messages": [],
+        }
+
+    conversation = _find_latest_website_widget_conversation(db, tenant_id=tenant.id, contact_id=contact.id)
+    if conversation is None:
+        return {
+            "tenant_id": tenant.id,
+            "channel_id": None,
+            "contact_id": contact.id,
+            "conversation_id": None,
+            "conversation_status": "",
+            "messages": [],
+        }
+
+    messages = list(
+        db.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation.id,
+                Message.id > after_id,
+                Message.direction == "outbound",
+            )
+            .order_by(Message.id.asc())
+            .limit(50)
+        ).all()
+    )
+    return {
+        "tenant_id": tenant.id,
+        "channel_id": conversation.channel_id,
+        "contact_id": contact.id,
+        "conversation_id": conversation.id,
+        "conversation_status": conversation.status,
+        "messages": messages,
     }
 
 

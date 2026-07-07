@@ -1406,6 +1406,7 @@ export function App() {
   const [lastInboundWorkerRun, setLastInboundWorkerRun] = useState<TrustedInboundWorkerRun | null>(null);
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null);
   const [selectedLiveConversationId, setSelectedLiveConversationId] = useState<number | null>(null);
+  const liveAutoRefreshInFlightRef = useRef(false);
   const [locallyClosedConversationIds, setLocallyClosedConversationIds] = useState<Set<number>>(() => new Set());
   const [conversationInboxView, setConversationInboxView] = useState<ListViewState>(() => createListViewState(8));
   const [conversationInboxFilters, setConversationInboxFilters] = useState<ConversationInboxFilters>({
@@ -1806,12 +1807,15 @@ export function App() {
     tenantId: string,
     token: string,
     view: ListViewState = conversationInboxView,
-    filters: ConversationInboxFilters = conversationInboxFilters
+    filters: ConversationInboxFilters = conversationInboxFilters,
+    options: { silent?: boolean } = {}
   ) {
-    setConversationInbox((current) => ({
-      status: "loading",
-      data: current.data
-    }));
+    if (!options.silent) {
+      setConversationInbox((current) => ({
+        status: "loading",
+        data: current.data
+      }));
+    }
     try {
       const data = await listConversationInbox(tenantId, token, {
         status: view.status,
@@ -1869,12 +1873,18 @@ export function App() {
     }
   }
 
-  async function refreshConversationDetail(conversationId: number, token: string) {
-    setConversationDetail((current) => ({
-      status: "loading",
-      message: "正在读取当前会话消息",
-      data: current.data?.id === conversationId ? current.data : null
-    }));
+  async function refreshConversationDetail(
+    conversationId: number,
+    token: string,
+    options: { silent?: boolean } = {}
+  ) {
+    if (!options.silent) {
+      setConversationDetail((current) => ({
+        status: "loading",
+        message: "正在读取当前会话消息",
+        data: current.data?.id === conversationId ? current.data : null
+      }));
+    }
     try {
       const data = await getConversationDetail(conversationId, token);
       setConversationDetail({
@@ -1921,7 +1931,7 @@ export function App() {
     setLocalReplyState({
       status: "sending",
       conversationId: item.id,
-      message: "正在写入本地会话记录"
+      message: item.channel_type === "website" ? "正在发送到网站访客" : "正在写入本地会话记录"
     });
     try {
       await createConversationMessage(item.id, auth.token, {
@@ -1935,7 +1945,7 @@ export function App() {
       setLocalReplyState({
         status: "sent",
         conversationId: item.id,
-        message: "已写入本地会话，未发送到外部平台。"
+        message: item.channel_type === "website" ? "已发送到网站访客。" : "已写入本地会话，未发送到外部平台。"
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "本地会话写入失败";
@@ -3332,6 +3342,58 @@ export function App() {
     }
     void refreshConversationDetail(selectedLiveConversationId, auth.token);
   }, [auth.status === "ready" ? auth.token : "", auth.status === "ready" ? auth.user.id : "", selectedLiveConversationId]);
+
+  useEffect(() => {
+    if (activeSection !== "live" || auth.status !== "ready" || !auth.token || !canReadConversations(auth.user)) {
+      return;
+    }
+    const token = auth.token;
+    const tenantId = auth.user.tenant.id;
+    let stopped = false;
+    const pollLiveWorkspace = async () => {
+      if (stopped || liveAutoRefreshInFlightRef.current) {
+        return;
+      }
+      liveAutoRefreshInFlightRef.current = true;
+      try {
+        await refreshConversationInbox(
+          tenantId,
+          token,
+          conversationInboxView,
+          conversationInboxFilters,
+          { silent: true }
+        );
+        if (selectedLiveConversationId) {
+          await refreshConversationDetail(selectedLiveConversationId, token, { silent: true });
+        }
+      } finally {
+        liveAutoRefreshInFlightRef.current = false;
+      }
+    };
+    const intervalId = window.setInterval(() => {
+      void pollLiveWorkspace();
+    }, 2500);
+    void pollLiveWorkspace();
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    activeSection,
+    auth.status === "ready" ? auth.token : "",
+    auth.status === "ready" ? auth.user.id : "",
+    auth.status === "ready" ? auth.user.tenant.id : "",
+    selectedLiveConversationId,
+    conversationInboxView.page,
+    conversationInboxView.pageSize,
+    conversationInboxView.query,
+    conversationInboxView.status,
+    conversationInboxFilters.assigned,
+    conversationInboxFilters.channelId,
+    conversationInboxFilters.priority,
+    conversationInboxFilters.sla,
+    conversationInboxFilters.sort
+  ]);
 
   function handleConversationInboxViewChange(nextView: ListViewState) {
     setConversationInboxView(nextView);

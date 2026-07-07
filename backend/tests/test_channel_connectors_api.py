@@ -217,12 +217,184 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert widget["status"] == "trusted_inbound_message_created"
     assert widget["conversation_id"]
     assert widget["message_id"]
+    assert widget["is_new_conversation"] is True
+    assert widget["conversation_status"] == "bot"
+
+    second_widget_res = client.post(
+        "/api/public/website-widget/messages",
+        json={
+            "tenant_id": tenant["id"],
+            "component_id": "website-widget",
+            "visitor_id": "visitor-public-001",
+            "visitor_name": "官网访客",
+            "text": "我再补充一句",
+            "page_url": "https://example.com/",
+            "page_title": "餐饮行业 AI 转型专家",
+        },
+    )
+    assert second_widget_res.status_code == 201
+    second_widget = second_widget_res.json()
+    assert second_widget["conversation_id"] == widget["conversation_id"]
+    assert second_widget["is_new_conversation"] is False
 
     inbox_res = client.get(f"/api/tenants/{tenant['id']}/conversation-inbox", headers=headers)
     assert inbox_res.status_code == 200
     inbox = inbox_res.json()
     assert inbox["total"] >= 1
     assert any(item["id"] == widget["conversation_id"] for item in inbox["items"])
+
+    reply_res = client.post(
+        f"/api/conversations/{widget['conversation_id']}/messages",
+        headers=headers,
+        json={
+            "direction": "outbound",
+            "sender_type": "agent",
+            "content": "您好，网站客服已经收到您的咨询。",
+            "external_message_id": "",
+        },
+    )
+    assert reply_res.status_code == 201
+    reply = reply_res.json()
+
+    poll_res = client.get(
+        "/api/public/website-widget/messages",
+        params={
+            "tenant_id": tenant["id"],
+            "visitor_id": "visitor-public-001",
+            "after_id": widget["message_id"],
+        },
+    )
+    assert poll_res.status_code == 200
+    poll = poll_res.json()
+    assert poll["conversation_id"] == widget["conversation_id"]
+    assert poll["conversation_status"] == "bot"
+    assert poll["messages"] == [
+        {
+            "id": reply["id"],
+            "conversation_id": widget["conversation_id"],
+            "direction": "outbound",
+            "sender_type": "agent",
+            "content": "您好，网站客服已经收到您的咨询。",
+            "created_at": reply["created_at"],
+        }
+    ]
+
+    empty_poll_res = client.get(
+        "/api/public/website-widget/messages",
+        params={
+            "tenant_id": tenant["id"],
+            "visitor_id": "visitor-public-001",
+            "after_id": reply["id"],
+        },
+    )
+    assert empty_poll_res.status_code == 200
+    assert empty_poll_res.json()["messages"] == []
+
+    close_res = client.post(
+        f"/api/conversations/{widget['conversation_id']}/workflow-actions",
+        headers=headers,
+        json={"action": "close", "note": "网站会话已结束"},
+    )
+    assert close_res.status_code == 200
+    assert close_res.json()["status"] == "closed"
+
+    closed_poll_res = client.get(
+        "/api/public/website-widget/messages",
+        params={
+            "tenant_id": tenant["id"],
+            "visitor_id": "visitor-public-001",
+            "after_id": reply["id"],
+        },
+    )
+    assert closed_poll_res.status_code == 200
+    closed_poll = closed_poll_res.json()
+    assert closed_poll["conversation_id"] == widget["conversation_id"]
+    assert closed_poll["conversation_status"] == "closed"
+    assert closed_poll["messages"][0]["sender_type"] == "system"
+    assert closed_poll["messages"][0]["content"] == "客服已关闭对话"
+
+    closed_send_res = client.post(
+        "/api/public/website-widget/messages",
+        json={
+            "tenant_id": tenant["id"],
+            "component_id": "website-widget",
+            "visitor_id": "visitor-public-001",
+            "visitor_name": "官网访客",
+            "text": "关闭后还能发吗",
+            "page_url": "https://example.com/",
+            "page_title": "餐饮行业 AI 转型专家",
+        },
+    )
+    assert closed_send_res.status_code == 409
+    assert closed_send_res.json()["detail"] == "conversation closed"
+
+    continue_res = client.post(
+        "/api/public/website-widget/messages",
+        json={
+            "tenant_id": tenant["id"],
+            "component_id": "website-widget",
+            "visitor_id": "visitor-public-001",
+            "visitor_name": "官网访客",
+            "text": "我想继续咨询",
+            "page_url": "https://example.com/",
+            "page_title": "餐饮行业 AI 转型专家",
+            "reopen_action": "continue_chat",
+        },
+    )
+    assert continue_res.status_code == 201
+    continued = continue_res.json()
+    assert continued["is_new_conversation"] is True
+    assert continued["conversation_id"] != widget["conversation_id"]
+    assert continued["conversation_status"] == "bot"
+
+    continue_poll_res = client.get(
+        "/api/public/website-widget/messages",
+        params={
+            "tenant_id": tenant["id"],
+            "visitor_id": "visitor-public-001",
+            "after_id": continued["message_id"],
+        },
+    )
+    assert continue_poll_res.status_code == 200
+    continue_poll = continue_poll_res.json()
+    assert continue_poll["conversation_id"] == continued["conversation_id"]
+    assert continue_poll["conversation_status"] == "bot"
+    assert continue_poll["messages"][0]["sender_type"] == "agent"
+    assert continue_poll["messages"][0]["content"] == "您好，已为您重新接入客服，请问还有什么可以帮您？"
+
+    continue_close_res = client.post(
+        f"/api/conversations/{continued['conversation_id']}/workflow-actions",
+        headers=headers,
+        json={"action": "close", "note": "继续咨询结束"},
+    )
+    assert continue_close_res.status_code == 200
+
+    leave_message_res = client.post(
+        "/api/public/website-widget/messages",
+        json={
+            "tenant_id": tenant["id"],
+            "component_id": "website-widget",
+            "visitor_id": "visitor-public-001",
+            "visitor_name": "官网访客",
+            "text": "请回电，我的电话是 13800000000",
+            "page_url": "https://example.com/",
+            "page_title": "餐饮行业 AI 转型专家",
+            "reopen_action": "leave_message",
+        },
+    )
+    assert leave_message_res.status_code == 201
+    leave_message = leave_message_res.json()
+    assert leave_message["is_new_conversation"] is True
+    assert leave_message["conversation_id"] != continued["conversation_id"]
+
+
+def test_public_website_widget_script_is_hosted(client) -> None:
+    res = client.get("/Web/js/customer-widget.js")
+
+    assert res.status_code == 200
+    assert "javascript" in res.headers["content-type"]
+    assert "window._WANFA" in res.text
+    assert "/api/public/website-widget/messages" in res.text
 
 
 def test_channel_account_identity_config_is_readable_and_does_not_enable_external_write(client) -> None:

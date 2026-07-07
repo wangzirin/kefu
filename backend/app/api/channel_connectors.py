@@ -19,6 +19,7 @@ from app.schemas.channel_connectors import (
     ConnectorSendPlanCreate,
     ConnectorSendPlanRead,
     OnlineReceiptQualitySummaryRead,
+    WebsiteWidgetConversationRead,
     WebsiteWidgetMessageCreate,
     WebsiteWidgetMessageRead,
 )
@@ -30,8 +31,9 @@ from app.services.channel_connectors import (
     get_channel_connector,
     get_online_receipt_quality_summary,
     list_channel_accounts,
-    list_channel_provider_registry,
     list_channel_delivery_receipts,
+    list_channel_provider_registry,
+    list_website_widget_conversation_messages,
     receive_channel_webhook_event,
     receive_website_widget_message,
     receive_wecom_official_xml_webhook,
@@ -112,6 +114,26 @@ def receive_public_website_widget_message(
     db: Session = Depends(get_db),
 ) -> dict:
     return receive_website_widget_message(db, payload=payload)
+
+
+@router.get(
+    "/public/website-widget/messages",
+    response_model=WebsiteWidgetConversationRead,
+)
+def list_public_website_widget_messages(
+    tenant_id: int | None = None,
+    tenant_slug: str = "",
+    visitor_id: str = "",
+    after_id: int = 0,
+    db: Session = Depends(get_db),
+) -> dict:
+    return list_website_widget_conversation_messages(
+        db,
+        tenant_id=tenant_id,
+        tenant_slug=tenant_slug,
+        visitor_id=visitor_id,
+        after_id=after_id,
+    )
 
 
 @router.post(

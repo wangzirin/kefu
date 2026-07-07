@@ -392,16 +392,21 @@ export function ConversationWorkbenchPanel({
           ? "正在写入本地会话。"
           : editableDraft.trim().length === 0
             ? "回复内容不能为空。"
-            : "";
+             : "";
   const replyTextValue = editableDraft;
-  const replyPlaceholder = "输入回复内容。当前只写入本地会话，不发送到外部平台。";
+  const isWebsiteConversation = selectedConversation.channel_type === "website";
+  const replyPlaceholder = isWebsiteConversation
+    ? "输入回复内容。发送后网站访客浮窗会收到消息。"
+    : "输入回复内容。当前只写入本地会话，不发送到外部平台。";
   const selectedChannelLabel = selectedChannelIdentity?.platform || selectedConversation.channel_name || selectedConversation.channel_type;
   const selectedStoreLabel = selectedChannelIdentity?.storeName || selectedChannelIdentity?.accountName || `渠道 #${selectedConversation.channel_id}`;
   const localReplyNotice = localReplyIsForSelected
     ? localReplyState.message
     : conversationDetailStatus === "loading"
       ? conversationDetailMessage
-      : "仅本地记录，未发送到外部平台。";
+      : isWebsiteConversation
+        ? "网站本地渠道已接通，发送后访客浮窗可收到回复。"
+        : "仅本地记录，未发送到外部平台。";
   const visitorLink = `https://kf-preview.local/conversation/${selectedConversation.id}`;
   const quickReplyTemplates = {
     personal: [
@@ -632,7 +637,7 @@ export function ConversationWorkbenchPanel({
                   value={replyTextValue}
                   onChange={(event) => setEditableDraft(event.target.value)}
                   aria-label="输入消息内容"
-                  placeholder="请输入消息内容..."
+                  placeholder={replyPlaceholder}
                 />
                 <div className="miduoke-composer-foot">
                   <small className={localReplyState.status === "error" && localReplyIsForSelected ? "is-error" : ""}>
@@ -1065,6 +1070,7 @@ function buildConversationTimeline({
   });
   const events: ConversationTimelineEvent[] = sortedMessages.map((message) => {
     const outbound = message.direction === "outbound";
+    const outboundMeta = conversation.channel_type === "website" ? "已发送到网站访客" : "本地记录";
     const kind: ConversationTimelineEvent["kind"] = message.sender_type === "system"
       ? "system"
       : outbound
@@ -1081,7 +1087,7 @@ function buildConversationTimeline({
           ? (message.sender_type === "ai" ? "AI 建议" : "坐席")
           : conversation.contact_display_name || `联系人 #${conversation.contact_id}`,
       text: message.content || "空消息",
-      meta: `${outbound ? "本地记录" : conversation.channel_name} · ${formatDateTime(message.created_at)}`
+      meta: `${outbound ? outboundMeta : conversation.channel_name} · ${formatDateTime(message.created_at)}`
     };
   });
   if (events.length === 0) {

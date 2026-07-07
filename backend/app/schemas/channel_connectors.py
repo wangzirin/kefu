@@ -129,6 +129,7 @@ class WebsiteWidgetMessageCreate(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     page_url: str = Field(default="", max_length=1000)
     page_title: str = Field(default="", max_length=300)
+    reopen_action: str = Field(default="", pattern="^(|continue_chat|leave_message)$")
 
 
 class WebsiteWidgetMessageRead(BaseModel):
@@ -139,6 +140,28 @@ class WebsiteWidgetMessageRead(BaseModel):
     message_id: int | None = None
     status: str
     next_action: str
+    is_new_conversation: bool = False
+    conversation_status: str = ""
+
+
+class WebsiteWidgetConversationMessageRead(BaseModel):
+    id: int
+    conversation_id: int
+    direction: str
+    sender_type: str
+    content: str
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class WebsiteWidgetConversationRead(BaseModel):
+    tenant_id: int
+    channel_id: int | None = None
+    contact_id: int | None = None
+    conversation_id: int | None = None
+    conversation_status: str = ""
+    messages: list[WebsiteWidgetConversationMessageRead] = Field(default_factory=list)
 
 
 class ChannelDeliveryReceiptRead(BaseModel):
