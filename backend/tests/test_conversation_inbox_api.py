@@ -436,6 +436,21 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
     assert reopened["assigned_user_id"] == owner["id"]
     assert reopened["status"] == "handoff"
 
+    close_res = client.post(
+        f"/api/conversations/{conversation['id']}/workflow-actions",
+        headers=owner_headers,
+        json={"action": "close", "note": "关闭当前对话"},
+    )
+    assert close_res.status_code == 200
+    assert close_res.json()["status"] == "closed"
+    close_message = db_session.scalar(
+        select(Message)
+        .where(Message.conversation_id == conversation["id"], Message.sender_type == "system")
+        .order_by(Message.id.desc())
+    )
+    assert close_message is not None
+    assert close_message.content == "客服已关闭对话"
+
     transfer_without_target = client.post(
         f"/api/conversations/{conversation['id']}/workflow-actions",
         headers=owner_headers,
@@ -458,4 +473,5 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
     assert "conversation.workflow.resolve" in event_types
     assert "conversation.workflow.release" in event_types
     assert "conversation.workflow.reopen" in event_types
+    assert "conversation.workflow.close" in event_types
     assert any("客户需要今天下午回访" in event.payload for event in events)

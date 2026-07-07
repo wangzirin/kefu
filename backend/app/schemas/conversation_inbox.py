@@ -48,6 +48,7 @@ ConversationWorkflowActionName = Literal[
     "claim",
     "release",
     "transfer",
+    "close",
     "resolve",
     "follow_up",
     "wait_customer",

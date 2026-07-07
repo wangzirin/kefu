@@ -19,6 +19,8 @@ from app.schemas.channel_connectors import (
     ConnectorSendPlanCreate,
     ConnectorSendPlanRead,
     OnlineReceiptQualitySummaryRead,
+    WebsiteWidgetMessageCreate,
+    WebsiteWidgetMessageRead,
 )
 from app.services.channel_connectors import (
     configure_channel_account,
@@ -31,6 +33,7 @@ from app.services.channel_connectors import (
     list_channel_provider_registry,
     list_channel_delivery_receipts,
     receive_channel_webhook_event,
+    receive_website_widget_message,
     receive_wecom_official_xml_webhook,
     verify_wecom_callback_url,
 )
@@ -97,6 +100,18 @@ def get_tenant_channel_connector(
     db: Session = Depends(get_db),
 ) -> ChannelConnector:
     return get_channel_connector(db, channel_id=channel_id, principal=principal)
+
+
+@router.post(
+    "/public/website-widget/messages",
+    response_model=WebsiteWidgetMessageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def receive_public_website_widget_message(
+    payload: WebsiteWidgetMessageCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    return receive_website_widget_message(db, payload=payload)
 
 
 @router.post(

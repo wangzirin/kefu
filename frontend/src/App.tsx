@@ -271,7 +271,11 @@ import {
   WorkspaceStateNotice,
   formatAccessDisabledReason
 } from "./components/common/WorkspaceState";
-import { ConversationWorkbenchPanel, type ChannelIdentitySummary } from "./components/conversation/ConversationWorkbenchPanel";
+import {
+  ConversationWorkbenchPanel,
+  type ChannelIdentitySummary,
+  type WorkbenchColleague
+} from "./components/conversation/ConversationWorkbenchPanel";
 import { ChannelConnectorCenterPanel } from "./components/channels/ChannelConnectorCenterPanel";
 import { KnowledgeWorkspacePage } from "./components/knowledge/KnowledgeWorkspacePage";
 import { QualityMetric, QualityReviewPanel } from "./components/quality/QualityReviewPanel";
@@ -1096,6 +1100,7 @@ export function App() {
   const [auth, setAuth] = useState<AuthViewState>({ status: "checking" });
   const [localSetupStatus, setLocalSetupStatus] = useState<LocalSetupStatus | null>(null);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => getInitialWorkspaceSection());
+  const [workspaceHash, setWorkspaceHash] = useState(() => (typeof window === "undefined" ? "" : window.location.hash));
   const [expandedNavGroups, setExpandedNavGroups] = useState<Record<string, boolean>>({});
   const [isMessageCenterOpen, setIsMessageCenterOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
@@ -1115,6 +1120,7 @@ export function App() {
   const [agentPresenceStatus, setAgentPresenceStatus] = useState<AgentPresenceStatus>("online");
   const [agentLeaveReason, setAgentLeaveReason] = useState("会议");
   const [dialogueScope, setDialogueScope] = useState<"current" | "recent" | "colleagues">("current");
+  const [selectedLiveColleagueId, setSelectedLiveColleagueId] = useState<number | null>(null);
   const [dialogueSearch, setDialogueSearch] = useState("");
   const [collapsedDialogueSections, setCollapsedDialogueSections] = useState<Record<string, boolean>>({});
   const [overviewTaskContext, setOverviewTaskContext] = useState<WorkspaceTaskContext | null>(() =>
@@ -1400,6 +1406,7 @@ export function App() {
   const [lastInboundWorkerRun, setLastInboundWorkerRun] = useState<TrustedInboundWorkerRun | null>(null);
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null);
   const [selectedLiveConversationId, setSelectedLiveConversationId] = useState<number | null>(null);
+  const [locallyClosedConversationIds, setLocallyClosedConversationIds] = useState<Set<number>>(() => new Set());
   const [conversationInboxView, setConversationInboxView] = useState<ListViewState>(() => createListViewState(8));
   const [conversationInboxFilters, setConversationInboxFilters] = useState<ConversationInboxFilters>({
     assigned: "all",
@@ -1667,6 +1674,7 @@ export function App() {
         window.history.replaceState(null, "", getWorkspaceSectionHash(nextSection));
       }
       const nextTaskContext = nextSection === requestedSection ? parseWorkspaceTaskContext(currentHash) : null;
+      setWorkspaceHash(currentHash);
       setActiveSection(nextSection);
       setOverviewTaskContext(nextTaskContext && nextTaskContext.targetSection === nextSection ? nextTaskContext : null);
       if (workspaceRef.current && window.matchMedia("(min-width: 721px)").matches) {
@@ -1816,7 +1824,7 @@ export function App() {
         priority: filters.priority,
         channel_id: filters.channelId ?? null
       });
-      setConversationInbox({ status: "ready", data });
+      setConversationInbox({ status: "ready", data: filterLocallyClosedConversations(data) });
     } catch (error) {
       const message = error instanceof Error ? error.message : "无法读取会话收件箱";
       setConversationInbox((current) => ({
@@ -1824,6 +1832,40 @@ export function App() {
         message,
         data: current.data
       }));
+    }
+  }
+
+  function filterLocallyClosedConversations(data: ConversationInboxList): ConversationInboxList {
+    if (locallyClosedConversationIds.size === 0) {
+      return data;
+    }
+    const items = data.items.filter((item) => !locallyClosedConversationIds.has(item.id));
+    return {
+      ...data,
+      items,
+      total: Math.max(0, data.total - (data.items.length - items.length))
+    };
+  }
+
+  function hideConversationLocally(conversationId: number) {
+    setLocallyClosedConversationIds((current) => {
+      const next = new Set(current);
+      next.add(conversationId);
+      return next;
+    });
+    setConversationInbox((current) => {
+      const removed = current.data.items.some((conversation) => conversation.id === conversationId);
+      return {
+        ...current,
+        data: {
+          ...current.data,
+          total: Math.max(0, current.data.total - (removed ? 1 : 0)),
+          items: current.data.items.filter((conversation) => conversation.id !== conversationId)
+        }
+      };
+    });
+    if (selectedLiveConversationId === conversationId) {
+      setSelectedLiveConversationId(null);
     }
   }
 
@@ -3530,39 +3572,64 @@ export function App() {
     }
   }
 
-  async function handleConversationWorkflowAction(item: ConversationInboxItem, action: ConversationWorkflowActionName, note?: string) {
+  async function handleConversationWorkflowAction(
+    item: ConversationInboxItem,
+    action: ConversationWorkflowActionName,
+    note?: string,
+    targetUserId?: number | null,
+    targetTeamId?: number | null
+  ) {
     if (auth.status === "ready" && auth.mode === "demo") {
       setConversationInbox((current) => ({
         ...current,
         data: {
           ...current.data,
-          items: current.data.items.map((conversation) =>
-            conversation.id === item.id
-              ? {
-                  ...conversation,
-                  status: action === "resolve" ? "resolved" : conversation.status,
-                  assigned_user_id: action === "release" ? null : conversation.assigned_user_id,
-                  next_action: note?.trim() || conversationActionNote(action)
-                }
-              : conversation
-          )
+          items: current.data.items
+            .filter((conversation) => action !== "close" || conversation.id !== item.id)
+            .map((conversation) =>
+              conversation.id === item.id
+                ? {
+                    ...conversation,
+                    status: action === "resolve" ? "resolved" : action === "close" ? "closed" : conversation.status,
+                    assigned_user_id:
+                      action === "release"
+                        ? null
+                        : action === "transfer"
+                          ? targetUserId ?? conversation.assigned_user_id
+                          : conversation.assigned_user_id,
+                    next_action: note?.trim() || conversationActionNote(action)
+                  }
+                : conversation
+            )
         }
       }));
+      if (action === "close" && selectedLiveConversationId === item.id) {
+        hideConversationLocally(item.id);
+      }
       return;
     }
     if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.conversationManage)) {
       return;
     }
-    setConversationInbox((current) => ({
-      status: "loading",
-      data: current.data
-    }));
+    if (action === "close") {
+      hideConversationLocally(item.id);
+    } else {
+      setConversationInbox((current) => ({
+        status: "loading",
+        data: current.data
+      }));
+    }
     try {
       await applyConversationWorkflowAction(item.id, auth.token, {
         action,
+        target_user_id: targetUserId,
+        target_team_id: targetTeamId,
         note: note?.trim() || conversationActionNote(action)
       });
       await refreshConversationInbox(auth.user.tenant.id, auth.token, conversationInboxView, conversationInboxFilters);
+      if (action === "close") {
+        hideConversationLocally(item.id);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "会话动作失败";
       setConversationInbox((current) => ({
@@ -5774,18 +5841,25 @@ export function App() {
           .slice(0, 6)
           .map((user, index) => ({
             id: Number(user.id),
-            name: user.name || user.email || `同事 ${index + 1}`,
+            name: normalizePublicProfile(user.public_profile).display_name || user.name || user.email || `同事 ${index + 1}`,
+            email: user.email,
             role: user.roles?.join(" / ") || "客服",
             status: user.status === "disabled" || user.status === "inactive" ? "offline" : index % 3 === 1 ? "busy" : "online",
-            activeChats: liveConversationsForWorkspace.filter((item) => item.assigned_user_id === Number(user.id)).length
+            activeChats: liveConversationsForWorkspace.filter((item) => item.assigned_user_id === Number(user.id)).length,
+            avatarDataUrl: user.avatar_data_url || "",
+            publicProfile: normalizePublicProfile(user.public_profile)
           }))
       : [
-          { id: 201, name: "客服小林", role: "售前客服", status: "online", activeChats: 3 },
-          { id: 202, name: "客服小周", role: "售后客服", status: "busy", activeChats: 6 },
-          { id: 203, name: "客服小陈", role: "值班主管", status: "online", activeChats: 1 },
-          { id: 204, name: "客服小何", role: "工单支持", status: "offline", activeChats: 0 }
+          { id: 201, name: "客服小林", email: "xiaolin@example.local", role: "售前客服", status: "online", activeChats: 3, avatarDataUrl: "", publicProfile: defaultPublicProfile },
+          { id: 202, name: "客服小周", email: "xiaozhou@example.local", role: "售后客服", status: "busy", activeChats: 6, avatarDataUrl: "", publicProfile: defaultPublicProfile },
+          { id: 203, name: "客服小陈", email: "xiaochen@example.local", role: "值班主管", status: "online", activeChats: 1, avatarDataUrl: "", publicProfile: defaultPublicProfile },
+          { id: 204, name: "客服小何", email: "xiaohe@example.local", role: "工单支持", status: "offline", activeChats: 0, avatarDataUrl: "", publicProfile: defaultPublicProfile }
         ]
-  ) as Array<{ id: number; name: string; role: string; status: string; activeChats: number }>;
+  ) as WorkbenchColleague[];
+  const selectedLiveColleague =
+    liveColleagueSummaries.find((colleague) => colleague.id === selectedLiveColleagueId) ??
+    liveColleagueSummaries[0] ??
+    null;
   const overviewTaskMatchCount = overviewTaskContext
     ? getWorkspaceTaskMatchCount(overviewTaskContext, {
         conversationItems: conversationInbox.data.items,
@@ -5860,6 +5934,9 @@ export function App() {
           />
         );
       case "live":
+        if (dialogueScope === "colleagues" && selectedLiveColleague) {
+          return <LiveColleagueProfilePanel colleague={selectedLiveColleague} />;
+        }
         return (
           <ConversationWorkbenchPanel
             state={conversationInbox}
@@ -5887,7 +5964,9 @@ export function App() {
             onSendLocalReply={(item, content) => void handleSendLocalConversationReply(item, content)}
             canApproveReviewDraft={canManageConversation && canManageOutboxDraft}
             canConfirmOutboxDraft={canManageOutboxDraft}
-            onWorkflowAction={(item, action, note) => void handleConversationWorkflowAction(item, action, note)}
+            onWorkflowAction={(item, action, note, targetUserId, targetTeamId) =>
+              void handleConversationWorkflowAction(item, action, note, targetUserId, targetTeamId)
+            }
             onApproveReviewDraft={(item, finalReply, resolutionNote) =>
               void handleReviewApprove(item, { finalReply, resolutionNote })
             }
@@ -6090,53 +6169,25 @@ export function App() {
         );
       case "channels":
         return (
-          <section className="workspace-page-grid stacked">
-            <ChannelConnectorCenterPanel
-              reviewItems={reviewItems}
-              outboxDrafts={outboxDrafts}
-              failureReviews={failureReviewItems}
-              deliveryJobs={deliveryJobs}
-              workerRun={lastInboundWorkerRun}
-              channelAccountState={channelAccountState}
-              hasToken={Boolean(auth.token)}
-              canManageConnector={canManageChannelConnector}
-              onConfigureChannelAccount={(channelId, payload) => handleConfigureChannelAccount(channelId, payload)}
-              onRefreshChannelAccounts={() => {
-                if (auth.token && canReadChannels(auth.user)) {
-                  void refreshChannelAccounts(auth.user.tenant.id, auth.token);
-                }
-              }}
-            />
-            <section className="workspace-page-grid two-column">
-              <article className="panel operation-health" id="workspace-channel-health">
-                <div className="panel-heading">
-                  <div>
-                    <h2>渠道健康</h2>
-                    <p>统一查看各通道入站、链路状态、风险和下一步动作。</p>
-                  </div>
-                  <Route size={20} />
-                </div>
-                <ChannelHealthTable
-                  failureReviews={failureReviewItems}
-                  deliveryJobs={deliveryJobs}
-                  latestEvaluationRun={knowledgeEvaluation.lastRun}
-                />
-              </article>
-              <FailureReviewPanel
-                state={failureReviews}
-                listView={failureListView}
-                hasToken={Boolean(auth.token)}
-                canManageFailureReview={canManageFailureReview}
-                onListViewChange={setFailureListView}
-                onRefresh={() => {
-                  if (auth.token && canReadFailureReviews(auth.user)) {
-                    void refreshFailureReviews(auth.user.tenant.id, auth.token);
-                  }
-                }}
-                onResolve={(item) => void handleResolveFailureReview(item)}
-              />
-            </section>
-          </section>
+          <ChannelConnectorCenterPanel
+            selectedChannelId={getChannelEntryIdFromHash(workspaceHash)}
+            reviewItems={reviewItems}
+            outboxDrafts={outboxDrafts}
+            failureReviews={failureReviewItems}
+            deliveryJobs={deliveryJobs}
+            workerRun={lastInboundWorkerRun}
+            channelAccountState={channelAccountState}
+            hasToken={Boolean(auth.token)}
+            canManageConnector={canManageChannelConnector}
+            tenantId={auth.user.tenant.id}
+            onConfigureChannelAccount={(channelId, payload) => handleConfigureChannelAccount(channelId, payload)}
+            onRefreshChannelAccounts={() => {
+              if (auth.token && canReadChannels(auth.user)) {
+                void refreshChannelAccounts(auth.user.tenant.id, auth.token);
+              }
+            }}
+            onCreateSafeTestConversation={handleCreateSafeTestConversation}
+          />
         );
       case "ops":
         return (
@@ -6361,7 +6412,7 @@ export function App() {
   const liveConversations = conversationInbox.data.items;
   const parsedCurrentUserId = Number(auth.user.id);
   const liveCurrentUserId = Number.isFinite(parsedCurrentUserId) ? parsedCurrentUserId : null;
-  const isLiveConversationActive = (item: ConversationInboxItem) => item.status !== "resolved";
+  const isLiveConversationActive = (item: ConversationInboxItem) => !["closed", "resolved"].includes(item.status);
   const isLiveQueuedConversation = (item: ConversationInboxItem) =>
     isLiveConversationActive(item) && item.assigned_user_id === null;
   const isLiveMineConversation = (item: ConversationInboxItem) =>
@@ -6790,16 +6841,18 @@ export function App() {
                 <section className="dialogue-colleague-list" aria-label="同事在线状态">
                   <div className="dialogue-section-note">当前只展示其他客服同事，不混入客户会话。</div>
                   {liveVisibleColleagues.length > 0 ? liveVisibleColleagues.map((colleague) => (
-                    <article
-                      className="dialogue-colleague-card"
+                    <button
+                      type="button"
+                      className={`dialogue-colleague-card${colleague.id === selectedLiveColleague?.id ? " active" : ""}`}
                       key={colleague.id}
+                      onClick={() => setSelectedLiveColleagueId(colleague.id)}
                     >
                       <span className={`colleague-status-dot is-${colleague.status}`} aria-hidden="true" />
                       <span>
                         <strong>{colleague.name}</strong>
                         <small>{colleague.role} · {formatColleagueStatus(colleague.status)} · {colleague.activeChats} 个会话</small>
                       </span>
-                    </article>
+                    </button>
                   )) : (
                     <p className="dialogue-empty">没有匹配的客服同事。</p>
                   )}
@@ -6844,9 +6897,8 @@ export function App() {
                       <span>排队中</span>
                       {liveQueuedConversations.length > 0 ? <small>{liveQueuedConversations.length}</small> : null}
                     </button>
-                    {!collapsedDialogueSections.queued ? <div className="dialogue-section-note">未分配坐席，等待领取。</div> : null}
-                    {!collapsedDialogueSections.queued
-                      ? liveQueuedConversations.length > 0 ? liveQueuedConversations.map((item) => (
+                    {!collapsedDialogueSections.queued && liveQueuedConversations.length > 0
+                      ? liveQueuedConversations.map((item) => (
                           <button
                             key={`queued-${item.id}`}
                             type="button"
@@ -6865,7 +6917,7 @@ export function App() {
                             </span>
                             {item.human_review_open_count > 0 ? <i aria-label="待处理消息">1</i> : null}
                           </button>
-                        )) : <p className="dialogue-empty">当前没有排队中的会话。</p>
+                        ))
                       : null}
                   </section>
                   <section className="dialogue-section">
@@ -6877,12 +6929,10 @@ export function App() {
                       title="已经分配给当前坐席、需要你继续处理的会话"
                     >
                       <ChevronDown className={collapsedDialogueSections.mine ? "collapsed" : ""} size={13} />
-                      <span>我的对话</span>
-                      <small>{liveMineConversations.length}</small>
+                      <span>{liveMineConversations.length > 0 ? `我的对话 (${liveMineConversations.length})` : "我的对话"}</span>
                     </button>
-                    {!collapsedDialogueSections.mine ? <div className="dialogue-section-note">已分配给我，正在接待。</div> : null}
-                    {!collapsedDialogueSections.mine
-                      ? liveMineConversations.length > 0 ? liveMineConversations.map((item) => (
+                    {!collapsedDialogueSections.mine && liveMineConversations.length > 0
+                      ? liveMineConversations.map((item) => (
                           <button
                             key={`mine-${item.id}`}
                             type="button"
@@ -6901,7 +6951,7 @@ export function App() {
                             </span>
                             {item.human_review_open_count > 0 ? <i aria-label="待处理消息">1</i> : null}
                           </button>
-                        )) : <p className="dialogue-empty">当前没有分配给我的会话。</p>
+                        ))
                       : null}
                   </section>
                   <section className="dialogue-section">
@@ -6916,9 +6966,8 @@ export function App() {
                       <span>访问中</span>
                       {liveVisitConversations.length > 0 ? <small>{liveVisitConversations.length}</small> : null}
                     </button>
-                    {!collapsedDialogueSections.visiting ? <div className="dialogue-section-note">仍在线访问，可能还未接入人工。</div> : null}
-                    {!collapsedDialogueSections.visiting
-                      ? liveVisitConversations.length > 0 ? liveVisitConversations
+                    {!collapsedDialogueSections.visiting && liveVisitConversations.length > 0
+                      ? liveVisitConversations
                           .slice(0, 8)
                           .map((item) => (
                             <button
@@ -6938,7 +6987,7 @@ export function App() {
                                 <small>{item.last_message_preview || item.channel_name || "正在访问"}</small>
                               </span>
                             </button>
-                          )) : <p className="dialogue-empty">当前没有访问中的未接待会话。</p>
+                          ))
                       : null}
                   </section>
                 </>
@@ -6965,7 +7014,7 @@ export function App() {
                   <a
                     key={item.label}
                     href={item.href}
-                    className={getWorkspaceSectionFromHash(item.href) === activeSection ? "active" : ""}
+                    className={isSecondaryNavigationItemActive(item.href, activeSection, workspaceHash) ? "active" : ""}
                     data-workspace-nav={getWorkspaceSectionFromHash(item.href)}
                   >
                     <span>{item.label}</span>
@@ -6981,31 +7030,33 @@ export function App() {
       </aside>
 
       <section className={`workspace workspace-${activeSection}`} ref={workspaceRef}>
-        <header className={`topbar${activeSection === "overview" ? " topbar-overview" : ""}${activeSection === "live" ? " topbar-live" : ""}`}>
-          <div>
-            <span className="page-kicker">{pageMeta.kicker}</span>
-            <h1>{pageMeta.title}</h1>
-            <p>{pageMeta.description}</p>
-          </div>
-          <div className="topbar-actions">
-            <ConnectionCard connection={connection} />
-            <button
-              type="button"
-              className="primary-action"
-              onClick={() => void refreshConnectionAndAllowedResources()}
-              disabled={connection.status === "loading"}
-            >
-              <RefreshCw size={17} />
-              {connection.status === "loading" ? "连接中" : "检查连接"}
-            </button>
-            <button type="button" className="ghost-action" data-role-smoke="logout-button" onClick={logout}>
-              <LogOut size={17} />
-              退出
-            </button>
-          </div>
-        </header>
+        {activeSection !== "channels" ? (
+          <header className={`topbar${activeSection === "overview" ? " topbar-overview" : ""}${activeSection === "live" ? " topbar-live" : ""}`}>
+            <div>
+              <span className="page-kicker">{pageMeta.kicker}</span>
+              <h1>{pageMeta.title}</h1>
+              <p>{pageMeta.description}</p>
+            </div>
+            <div className="topbar-actions">
+              <ConnectionCard connection={connection} />
+              <button
+                type="button"
+                className="primary-action"
+                onClick={() => void refreshConnectionAndAllowedResources()}
+                disabled={connection.status === "loading"}
+              >
+                <RefreshCw size={17} />
+                {connection.status === "loading" ? "连接中" : "检查连接"}
+              </button>
+              <button type="button" className="ghost-action" data-role-smoke="logout-button" onClick={logout}>
+                <LogOut size={17} />
+                退出
+              </button>
+            </div>
+          </header>
+        ) : null}
 
-        {activeSection !== "overview" && activeSection !== "live" ? (
+        {activeSection !== "overview" && activeSection !== "live" && activeSection !== "channels" ? (
           <RoleTaskPathStrip
             paths={visibleTaskPaths}
             activeSection={activeSection}
@@ -7014,7 +7065,7 @@ export function App() {
           />
         ) : null}
 
-        {activeSection !== "overview" && activeSection !== "live" ? (
+        {activeSection !== "overview" && activeSection !== "live" && activeSection !== "channels" ? (
           <WorkspaceRuntimeStateStrip
             mode={auth.mode}
             connectionStatus={connection.status}
@@ -7576,6 +7627,23 @@ function getWorkspaceSectionFromHash(hash: string): WorkspaceSection {
     settings: "settings"
   };
   return aliases[value] ?? "overview";
+}
+
+function getChannelEntryIdFromHash(hash: string) {
+  const channel = getWorkspaceHashParams(hash).get("channel");
+  return ["website", "wechat_official", "wechat_miniapp", "wecom"].includes(channel ?? "")
+    ? channel ?? "website"
+    : "website";
+}
+
+function isSecondaryNavigationItemActive(href: string, activeSection: WorkspaceSection, currentHash: string) {
+  if (getWorkspaceSectionFromHash(href) !== activeSection) {
+    return false;
+  }
+  if (activeSection !== "channels") {
+    return true;
+  }
+  return getChannelEntryIdFromHash(href) === getChannelEntryIdFromHash(currentHash);
 }
 
 function buildChannelIdentityFallbacks(items: ConversationInboxItem[]): Record<number, ChannelIdentitySummary> {
@@ -8293,6 +8361,42 @@ function ModelRoutingPanel({
         </div>
       ) : null}
       <p className="inline-notice">自动回复策略页展示的是当前决策边界，不代表已经完成模型成本报表、本地模型推理或全渠道自动回复。</p>
+    </section>
+  );
+}
+
+function LiveColleagueProfilePanel({ colleague }: { colleague: WorkbenchColleague }) {
+  const profile = normalizePublicProfile(colleague.publicProfile);
+  const displayName = profile.display_name || colleague.name;
+  const fields = [
+    { label: "对外昵称", value: profile.display_name },
+    { label: "座机", value: profile.phone },
+    { label: "手机", value: profile.mobile },
+    { label: "邮箱", value: colleague.email },
+    { label: "QQ", value: profile.qq },
+    { label: "微信", value: profile.wechat }
+  ];
+  return (
+    <section className="live-colleague-profile-panel" aria-label="同事资料">
+      <div className="live-colleague-profile-card">
+        <header>
+          <div>
+            <h2>{displayName}</h2>
+            <span>{colleague.role} · {formatColleagueStatus(colleague.status)} · {colleague.activeChats} 个会话</span>
+          </div>
+          <div className="live-colleague-profile-avatar" aria-hidden="true">
+            {colleague.avatarDataUrl ? <img src={colleague.avatarDataUrl} alt="" /> : <Users size={34} />}
+          </div>
+        </header>
+        <dl>
+          {fields.map((field) => (
+            <div key={field.label}>
+              <dt>{field.label}:</dt>
+              <dd>{field.value?.trim() || "-"}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
     </section>
   );
 }
@@ -16733,6 +16837,7 @@ function conversationActionNote(action: ConversationWorkflowActionName) {
     claim: "坐席领取会话",
     release: "坐席释放会话回公共池",
     transfer: "坐席转派会话",
+    close: "坐席关闭对话",
     resolve: "坐席标记会话已解决",
     follow_up: "坐席标记会话需跟进",
     wait_customer: "坐席标记等待客户回复",

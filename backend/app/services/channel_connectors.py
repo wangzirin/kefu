@@ -13,6 +13,7 @@ from app.models import (
     DeliveryFailureReview,
     OutboxDraft,
     OutboxSendAttempt,
+    Tenant,
     WorkflowRun,
 )
 from app.models.foundation import utc_now
@@ -22,6 +23,7 @@ from app.schemas.channel_connectors import (
     ChannelDeliveryReceiptCreate,
     ChannelWebhookEventCreate,
     ConnectorSendPlanCreate,
+    WebsiteWidgetMessageCreate,
 )
 from app.services.channel_provider_registry import (
     get_channel_provider_contract,
@@ -776,6 +778,84 @@ def receive_channel_webhook_event(
         "parsed_event": parsed_event,
         "registry_contract": contract,
         "next_action": trusted_inbound.next_action if verification.signature_validated else verification.next_action,
+    }
+
+
+def receive_website_widget_message(
+    db: Session,
+    *,
+    payload: WebsiteWidgetMessageCreate,
+) -> dict:
+    tenant = None
+    if payload.tenant_id is not None:
+        tenant = db.get(Tenant, payload.tenant_id)
+    if tenant is None and payload.tenant_slug:
+        tenant = db.scalar(select(Tenant).where(Tenant.slug == payload.tenant_slug))
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="tenant not found")
+
+    channel = db.scalar(
+        select(Channel).where(
+            Channel.tenant_id == tenant.id,
+            Channel.type == "website",
+            Channel.name == "网站客服",
+        )
+    )
+    if channel is None:
+        channel = Channel(
+            tenant_id=tenant.id,
+            type="website",
+            name="网站客服",
+            reply_mode="assist",
+            status="active",
+        )
+        db.add(channel)
+        db.flush()
+
+    message_index = int(utc_now().timestamp() * 1000)
+    visitor_id = payload.visitor_id.strip() or f"website-visitor-{message_index}"
+    raw_payload = {
+        "message_id": f"website-widget-{tenant.id}-{payload.component_id}-{message_index}",
+        "visitor_id": visitor_id,
+        "visitor_name": payload.visitor_name.strip() or "网站访客",
+        "text": payload.text.strip(),
+        "component_id": payload.component_id,
+        "page_url": payload.page_url,
+        "page_title": payload.page_title,
+    }
+    trusted_inbound = create_trusted_inbound_message_if_ready(
+        db,
+        channel=channel,
+        provider="website",
+        event_type="message",
+        provider_event_id=raw_payload["message_id"],
+        external_message_id=raw_payload["message_id"],
+        raw_payload=raw_payload,
+    )
+    add_audit_event(
+        db,
+        tenant_id=tenant.id,
+        actor_id=None,
+        action="website_widget.public_message_received",
+        resource_type="conversation",
+        resource_id=str(trusted_inbound.conversation_id or ""),
+        payload={
+            "channel_id": channel.id,
+            "component_id": payload.component_id,
+            "trusted_message_id": trusted_inbound.trusted_message_id,
+            "conversation_id": trusted_inbound.conversation_id,
+            "external_write": False,
+        },
+    )
+    db.commit()
+    return {
+        "tenant_id": tenant.id,
+        "channel_id": channel.id,
+        "contact_id": trusted_inbound.contact_id,
+        "conversation_id": trusted_inbound.conversation_id,
+        "message_id": trusted_inbound.trusted_message_id,
+        "status": trusted_inbound.status,
+        "next_action": trusted_inbound.next_action,
     }
 
 

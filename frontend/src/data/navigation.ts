@@ -91,13 +91,18 @@ export const navigationGroups: NavigationGroup[] = [
     ]
   },
   {
-    label: "企微助手",
+    label: "渠道接入",
     href: "#channels",
-    count: "企微",
-    description: "渠道账号、官方接入和回调验证",
+    count: "渠道",
+    description: "网站、微信生态和企业微信接入",
     icon: "wecom",
     visibleTo: ["owner", "admin", "viewer"],
-    items: [{ label: "渠道接入", href: "#channels", count: "状态", active: false }]
+    items: [
+      { label: "网站", href: "#channels?channel=website", count: "网页", active: false },
+      { label: "微信公众号", href: "#channels?channel=wechat_official", count: "公众号", active: false },
+      { label: "微信小程序", href: "#channels?channel=wechat_miniapp", count: "小程序", active: false },
+      { label: "企业微信", href: "#channels?channel=wecom", count: "企微", active: false }
+    ]
   },
   {
     label: "线索表单",

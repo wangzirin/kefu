@@ -1,5 +1,24 @@
-import { AlertTriangle, PlusCircle, RefreshCw, Route, ShieldCheck, Store, UsersRound } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  Building2,
+  Code2,
+  Copy,
+  Eye,
+  Globe2,
+  Link2,
+  MessageCircle,
+  RefreshCw,
+  Send,
+  Settings,
+  Smartphone,
+  X,
+  AlertTriangle,
+  PlusCircle,
+  Route,
+  ShieldCheck,
+  Store,
+  UsersRound
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
@@ -95,7 +114,55 @@ interface ChannelBoundaryRequirement {
   unfinishedReason: string;
 }
 
+type ChannelEntryId = "website" | "wechat_official" | "wechat_miniapp" | "wecom";
+
+interface ChannelAccessComponent {
+  id: string;
+  name: string;
+  componentType: string;
+  style: "widget" | "link" | "menu" | "miniapp" | "qrcode";
+  mount: string;
+  status: "enabled" | "draft" | "planned";
+  updatedAt: string;
+  description: string;
+  position?: string;
+  welcomeText?: string;
+  themeColor?: string;
+  buttonText?: string;
+  allowedOrigin?: string;
+}
+
+interface ChannelEntryDefinition {
+  id: ChannelEntryId;
+  label: string;
+  subtitle: string;
+  description: string;
+  componentQuota: number;
+  setupHint: string;
+  primaryAction: string;
+  secondaryAction: string;
+  components: ChannelAccessComponent[];
+}
+
+interface CustomerPreviewMessage {
+  id: string;
+  role: "customer" | "agent" | "system";
+  text: string;
+  time: string;
+}
+
+interface WebsiteComponentConfigDraft {
+  name: string;
+  componentType: "插件型" | "链接型";
+  mount: string;
+  welcomeText: string;
+  themeColor: string;
+  buttonText: string;
+  allowedOrigin: string;
+}
+
 export function ChannelConnectorCenterPanel({
+  selectedChannelId,
   reviewItems,
   outboxDrafts,
   failureReviews,
@@ -105,8 +172,11 @@ export function ChannelConnectorCenterPanel({
   hasToken,
   canManageConnector,
   onConfigureChannelAccount,
-  onRefreshChannelAccounts
+  onRefreshChannelAccounts,
+  onCreateSafeTestConversation,
+  tenantId
 }: {
+  selectedChannelId?: string;
   reviewItems: HumanReviewInboxItem[];
   outboxDrafts: OutboxDraft[];
   failureReviews: DeliveryFailureReview[];
@@ -117,6 +187,8 @@ export function ChannelConnectorCenterPanel({
   canManageConnector: boolean;
   onConfigureChannelAccount: (channelId: number, payload: ChannelAccountPayload) => Promise<ChannelAccount>;
   onRefreshChannelAccounts: () => void;
+  onCreateSafeTestConversation?: () => Promise<unknown | null>;
+  tenantId?: string | number;
 }) {
   const connectors = buildChannelConnectorCards({
     reviewItems,
@@ -151,6 +223,27 @@ export function ChannelConnectorCenterPanel({
     message: ""
   });
   const [activeLayer, setActiveLayer] = useState<ChannelAccessLayer>("accounts");
+  const [activeChannelId, setActiveChannelId] = useState<ChannelEntryId>(() => normalizeChannelEntryId(selectedChannelId));
+  const [componentTypeFilter, setComponentTypeFilter] = useState("all");
+  const [componentSearch, setComponentSearch] = useState("");
+  const [selectedComponentId, setSelectedComponentId] = useState("website-widget");
+  const [websiteComponents, setWebsiteComponents] = useState<ChannelAccessComponent[]>(() =>
+    CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === "website")?.components ?? []
+  );
+  const [codeModalComponent, setCodeModalComponent] = useState<ChannelAccessComponent | null>(null);
+  const [previewModalComponent, setPreviewModalComponent] = useState<ChannelAccessComponent | null>(null);
+  const [configModalComponent, setConfigModalComponent] = useState<ChannelAccessComponent | null>(null);
+  const [configDraft, setConfigDraft] = useState<WebsiteComponentConfigDraft>(() =>
+    createWebsiteConfigDraft(CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === "website")?.components[0])
+  );
+  const [previewStartState, setPreviewStartState] = useState<{ status: "idle" | "starting" | "error"; message: string }>({
+    status: "idle",
+    message: ""
+  });
+  const [isCustomerPreviewOpen, setIsCustomerPreviewOpen] = useState(true);
+  const [customerDraft, setCustomerDraft] = useState("");
+  const [customerPreviewMessages, setCustomerPreviewMessages] = useState<CustomerPreviewMessage[]>(DEFAULT_CUSTOMER_PREVIEW_MESSAGES);
+  const [channelUiNotice, setChannelUiNotice] = useState("");
   const availableChannels = channelAccountState.channels;
   const channelAccounts = channelAccountState.accounts;
   const channelById = useMemo(() => {
@@ -161,6 +254,18 @@ export function ChannelConnectorCenterPanel({
     return result;
   }, [availableChannels]);
   const selectedChannel = accountDraft.channelId ? channelById[Number(accountDraft.channelId)] : null;
+
+  useEffect(() => {
+    const nextChannelId = normalizeChannelEntryId(selectedChannelId);
+    const nextEntry = CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === nextChannelId) ?? CHANNEL_ENTRY_DEFINITIONS[0];
+    setActiveChannelId((current) => (current === nextChannelId ? current : nextChannelId));
+    setComponentTypeFilter("all");
+    setComponentSearch("");
+    const nextComponents = nextEntry.id === "website" ? websiteComponents : nextEntry.components;
+    setSelectedComponentId(nextComponents[0]?.id ?? "");
+    setIsCustomerPreviewOpen(true);
+    setChannelUiNotice("");
+  }, [selectedChannelId, websiteComponents]);
 
   async function submitChannelAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -204,6 +309,531 @@ export function ChannelConnectorCenterPanel({
       setAccountSaveState({ status: "error", message });
     }
   }
+
+  const activeEntry = CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === activeChannelId) ?? CHANNEL_ENTRY_DEFINITIONS[0];
+  const activeComponents = activeEntry.id === "website" ? websiteComponents : activeEntry.components;
+  const componentTypes = Array.from(new Set(activeComponents.map((component) => component.componentType)));
+  const filteredComponents = activeComponents.filter((component) => {
+    const keyword = componentSearch.trim().toLowerCase();
+    const matchesType = componentTypeFilter === "all" || component.componentType === componentTypeFilter;
+    const matchesKeyword =
+      !keyword ||
+      [component.name, component.componentType, component.mount, component.description].some((value) =>
+        value.toLowerCase().includes(keyword)
+      );
+    return matchesType && matchesKeyword;
+  });
+  const listedComponents = activeEntry.id === "website" ? filteredComponents : [];
+  const channelColumns = getChannelTableColumns(activeEntry.id);
+  const channelNotes = getChannelAccessNotes(activeEntry.id);
+  const guideSteps = getChannelGuideSteps(activeEntry.id);
+  const apiFields = getChannelApiFields(activeEntry.id);
+  const backendHooks = getChannelBackendHooks(activeEntry.id);
+  const selectedComponent =
+    activeComponents.find((component) => component.id === selectedComponentId) ??
+    activeComponents[0];
+  const codeSnippet = buildCustomerAccessSnippet(activeEntry, selectedComponent, tenantId);
+
+  function selectChannel(entry: ChannelEntryDefinition) {
+    setActiveChannelId(entry.id);
+    setComponentTypeFilter("all");
+    setComponentSearch("");
+    const nextComponents = entry.id === "website" ? websiteComponents : entry.components;
+    setSelectedComponentId(nextComponents[0]?.id ?? "");
+    setIsCustomerPreviewOpen(true);
+    setChannelUiNotice("");
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `#channels?channel=${entry.id}`);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+  }
+
+  function openCodeModal(component: ChannelAccessComponent) {
+    setSelectedComponentId(component.id);
+    setCodeModalComponent(component);
+    setChannelUiNotice(`正在查看“${component.name}”接入代码。`);
+  }
+
+  function openPreview(component: ChannelAccessComponent) {
+    setSelectedComponentId(component.id);
+    setPreviewModalComponent(component);
+    setPreviewStartState({ status: "idle", message: "" });
+    setChannelUiNotice(`正在预览：${component.name}`);
+  }
+
+  function openConfig(component: ChannelAccessComponent) {
+    setSelectedComponentId(component.id);
+    setConfigModalComponent(component);
+    setConfigDraft(createWebsiteConfigDraft(component));
+    setAccountDraft((current) => ({
+      ...current,
+      provider: activeEntry.id,
+      platform: activeEntry.label,
+      accountName: `${activeEntry.label}测试入口`,
+      storeName: activeEntry.label,
+      entrypointName: component.name,
+      authorizationStatus: "sandbox_configuring",
+      accessStatus: "sandbox_configuring",
+      replyMode: "human_review_first",
+      healthStatus: "configuring",
+      publicNote: component.description
+    }));
+    setChannelUiNotice(`正在配置：${component.name}`);
+  }
+
+  function configureComponent(component: ChannelAccessComponent) {
+    if (activeEntry.id === "website") {
+      openConfig(component);
+      return;
+    }
+    setSelectedComponentId(component.id);
+    setAccountDraft((current) => ({
+      ...current,
+      provider: activeEntry.id,
+      platform: activeEntry.label,
+      accountName: `${activeEntry.label}测试入口`,
+      storeName: activeEntry.label,
+      entrypointName: component.name,
+      authorizationStatus: "sandbox_configuring",
+      accessStatus: "sandbox_configuring",
+      replyMode: "human_review_first",
+      healthStatus: "configuring",
+      publicNote: component.description
+    }));
+    setChannelUiNotice(`已把“${component.name}”填入前端配置草稿。`);
+  }
+
+  async function copySnippet(snippet = codeSnippet) {
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setChannelUiNotice("接入代码已复制到剪贴板。");
+    } catch {
+      setChannelUiNotice("当前浏览器不允许直接复制，可以手动选择代码。");
+    }
+  }
+
+  async function startPreviewConversation() {
+    if (!hasToken || !onCreateSafeTestConversation) {
+      setPreviewStartState({ status: "error", message: "需要登录并具备会话管理权限后才能进入测试对话。" });
+      return;
+    }
+    setPreviewStartState({ status: "starting", message: "正在创建测试对话..." });
+    const result = await onCreateSafeTestConversation();
+    if (!result) {
+      setPreviewStartState({ status: "error", message: "需要登录并具备会话管理权限后才能进入测试对话。" });
+      return;
+    }
+    setPreviewStartState({ status: "idle", message: "" });
+    setPreviewModalComponent(null);
+  }
+
+  function submitWebsiteConfig(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!configModalComponent) {
+      return;
+    }
+    const now = new Date();
+    const nextStyle = configDraft.componentType === "链接型" ? "link" : "widget";
+    setWebsiteComponents((current) =>
+      current.map((component) =>
+        component.id === configModalComponent.id
+          ? {
+              ...component,
+              name: configDraft.name.trim() || component.name,
+              componentType: configDraft.componentType,
+              style: nextStyle,
+              mount: configDraft.mount.trim() || component.mount,
+              welcomeText: configDraft.welcomeText.trim(),
+              themeColor: configDraft.themeColor.trim() || "#1677ff",
+              buttonText: configDraft.buttonText.trim() || "在线咨询",
+              allowedOrigin: configDraft.allowedOrigin.trim(),
+              position: nextStyle === "widget" ? "right-bottom" : "inline-link",
+              updatedAt: formatChannelComponentUpdatedAt(now),
+              description:
+                nextStyle === "widget"
+                  ? "网页右下角浮窗，顾客可直接打开聊天。"
+                  : "可复制到按钮、菜单或二维码里的顾客咨询链接。"
+            }
+          : component
+      )
+    );
+    setConfigModalComponent(null);
+    setChannelUiNotice(`已保存“${configDraft.name.trim() || configModalComponent.name}”前端配置，后续可接 connector-config。`);
+  }
+
+  function submitCustomerPreview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = customerDraft.trim();
+    if (!content) {
+      return;
+    }
+    const now = new Date();
+    const time = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    setCustomerPreviewMessages((current) => [
+      ...current,
+      { id: `customer-${now.getTime()}`, role: "customer", text: content, time },
+      {
+        id: `agent-${now.getTime()}`,
+        role: "agent",
+        text: "您好，已收到您的咨询。这里是顾客端预览消息，后续可接入真实会话队列。",
+        time
+      }
+    ]);
+    setCustomerDraft("");
+  }
+
+  function showClosedNotice() {
+    const now = new Date();
+    setCustomerPreviewMessages((current) => [
+      ...current,
+      {
+        id: `system-close-${now.getTime()}`,
+        role: "system",
+        text: "客服已关闭对话",
+        time: now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+      }
+    ]);
+  }
+
+  return (
+    <section
+      id="workspace-channels"
+      className="channel-access-workbench miduoke-channel-settings"
+      data-channel-connector-smoke="center"
+      aria-label="渠道接入"
+    >
+      <main className="channel-access-main">
+        <header className="channel-access-topbar">
+          <strong>{activeEntry.label}</strong>
+        </header>
+
+        <div className="miduoke-channel-layout">
+          <div className="miduoke-channel-main">
+            <section className="miduoke-access-card" aria-label={`${activeEntry.label}接入说明`}>
+              <h2>{activeEntry.id === "wecom" ? "绑定企业微信账号" : `${activeEntry.label}接入`}</h2>
+              <p>{activeEntry.description}</p>
+              <div className="miduoke-access-actions">
+                <button type="button" className="miduoke-primary-button" onClick={() => configureComponent(activeComponents[0])}>
+                  {activeEntry.id === "website" ? activeEntry.primaryAction : activeEntry.id === "wechat_official" ? "扫码接入（推荐）" : "扫码接入"}
+                </button>
+                {activeEntry.id !== "website" ? (
+                  <button type="button" className="miduoke-primary-button" onClick={() => configureComponent(activeComponents[0])}>
+                    手动接入
+                  </button>
+                ) : null}
+                {activeEntry.id === "wechat_official" || activeEntry.id === "wechat_miniapp" ? (
+                  <button type="button" className="miduoke-secondary-button" onClick={() => configureComponent(activeComponents[0])}>
+                    全局配置
+                  </button>
+                ) : null}
+                {activeEntry.id === "website" ? (
+                  <button type="button" className="miduoke-secondary-button" onClick={() => configureComponent(activeComponents[0])}>
+                    {activeEntry.secondaryAction}
+                  </button>
+                ) : null}
+              </div>
+              {channelNotes.length ? (
+                <div className="miduoke-access-notes">
+                  {channelNotes.map((note) => (
+                    <p key={note}>{note}</p>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+
+            <section className="miduoke-list-card" aria-label={getChannelTableTitle(activeEntry.id)}>
+              <div className="miduoke-list-toolbar">
+                <div>
+                  <h2>{getChannelTableTitle(activeEntry.id)}</h2>
+                  {activeEntry.id === "website" ? <small>*还可添加{activeEntry.componentQuota}个组件</small> : null}
+                </div>
+                <div className="miduoke-search-group">
+                  {activeEntry.id === "website" ? (
+                    <select value={componentTypeFilter} onChange={(event) => setComponentTypeFilter(event.target.value)}>
+                      <option value="all">组件类型</option>
+                      {componentTypes.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  <input
+                    value={componentSearch}
+                    onChange={(event) => setComponentSearch(event.target.value)}
+                    placeholder={getChannelSearchPlaceholder(activeEntry.id)}
+                  />
+                  <button type="button" aria-label="搜索">
+                    搜索
+                  </button>
+                </div>
+              </div>
+
+              <div className="miduoke-channel-table" role="table">
+                <div className="miduoke-channel-row head" role="row" style={{ gridTemplateColumns: getChannelGridTemplate(activeEntry.id) }}>
+                  {channelColumns.map((column) => (
+                    <span key={column}>{column}</span>
+                  ))}
+                </div>
+                {listedComponents.length ? (
+                  listedComponents.map((component) => (
+                    <div
+                      key={component.id}
+                      className="miduoke-channel-row"
+                      role="row"
+                      style={{ gridTemplateColumns: getChannelGridTemplate(activeEntry.id) }}
+                    >
+                      <span>
+                        <ChannelComponentPreviewIcon style={component.style} />
+                      </span>
+                      <span>
+                        <strong>{component.name}</strong>
+                        <small>{component.componentType}</small>
+                      </span>
+                      <span>{component.mount}</span>
+                      <span>{component.updatedAt.replace(" 09:30", " 13:45")}</span>
+                      <span className="miduoke-channel-actions">
+                        <button type="button" onClick={() => openCodeModal(component)}>
+                          查看代码
+                        </button>
+                        <button type="button" onClick={() => openPreview(component)}>
+                          预览
+                        </button>
+                        <button type="button" onClick={() => openConfig(component)}>
+                          配置
+                        </button>
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="miduoke-empty-state">
+                    <span />
+                    <p>暂无数据</p>
+                  </div>
+                )}
+              </div>
+              {activeEntry.id === "website" && listedComponents.length ? (
+                <div className="miduoke-pagination" aria-label="分页">
+                  <button type="button">‹</button>
+                  <strong>1</strong>
+                  <button type="button">›</button>
+                  <span>共{listedComponents.length}条</span>
+                  <select defaultValue="5">
+                    <option value="5">5 条/页</option>
+                    <option value="10">10 条/页</option>
+                  </select>
+                  <span>跳至</span>
+                  <input defaultValue="1" aria-label="页码" />
+                  <span>页</span>
+                  <button type="button">确定</button>
+                </div>
+              ) : null}
+            </section>
+          </div>
+
+          <aside className="miduoke-guide-panel" aria-label={`${activeEntry.label}接入指导`}>
+            <h2>接入指导</h2>
+            <p>{activeEntry.setupHint}</p>
+            <ol>
+              {guideSteps.map((step) => (
+                <li key={step}>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="miduoke-guide-note">
+              <strong>当前状态</strong>
+              <span>{channelUiNotice || "请按左侧渠道选择对应接入方式，未配置前不会触发真实外发。"}</span>
+            </div>
+            <div className="miduoke-api-contract" aria-label={`${activeEntry.label}后端接口预留`}>
+              <div>
+                <strong>后端接口预留</strong>
+                <small>按钮后续接这些字段</small>
+              </div>
+              <dl>
+                {apiFields.map((field) => (
+                  <div key={field.label}>
+                    <dt>{field.label}</dt>
+                    <dd>{field.value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="miduoke-hook-list">
+                {backendHooks.map((hook) => (
+                  <code key={hook}>{hook}</code>
+                ))}
+              </div>
+            </div>
+          </aside>
+        </div>
+      </main>
+      {codeModalComponent ? (
+        <div className="miduoke-modal-backdrop" role="presentation">
+          <section className="miduoke-modal miduoke-code-modal" role="dialog" aria-modal="true" aria-label="嵌入网站代码">
+            <header className="miduoke-modal-head">
+              <div>
+                <h2>嵌入网站代码</h2>
+                <p>将以下代码嵌入到网站页面 &lt;/body&gt; 标签之前即可。</p>
+              </div>
+              <button type="button" className="miduoke-icon-button" aria-label="关闭" onClick={() => setCodeModalComponent(null)}>
+                <X size={18} />
+              </button>
+            </header>
+            <pre className="miduoke-code-block">
+              <code>{buildCustomerAccessSnippet(activeEntry, codeModalComponent, tenantId)}</code>
+            </pre>
+            <footer className="miduoke-modal-actions">
+              <button type="button" className="miduoke-secondary-button" onClick={() => setCodeModalComponent(null)}>
+                关闭
+              </button>
+              <button type="button" className="miduoke-primary-button" onClick={() => void copySnippet(buildCustomerAccessSnippet(activeEntry, codeModalComponent, tenantId))}>
+                复制代码
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+      {previewModalComponent ? (
+        <div className="miduoke-modal-backdrop" role="presentation">
+          <section className="miduoke-modal miduoke-preview-modal" role="dialog" aria-modal="true" aria-label="网站客服预览">
+            <header className="miduoke-modal-head">
+              <div>
+                <h2>网站客服预览</h2>
+                <p>{previewModalComponent.style === "link" ? "链接版入口会出现在导航、按钮或落地页区域。" : "插件版入口会固定在网站右下角。"}</p>
+              </div>
+              <button type="button" className="miduoke-icon-button" aria-label="关闭" onClick={() => setPreviewModalComponent(null)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="miduoke-website-preview">
+              <nav>
+                <strong>示例官网</strong>
+                <span>首页</span>
+                <span>产品</span>
+                <span>服务</span>
+                {previewModalComponent.style === "link" ? (
+                  <button type="button" onClick={() => void startPreviewConversation()}>
+                    {previewModalComponent.buttonText || "在线咨询"}
+                  </button>
+                ) : null}
+              </nav>
+              <main>
+                <h3>智能客服接入演示页</h3>
+                <p>这里模拟你的真实网站页面，用于确认接待组件的入口位置、按钮文案和顾客点击路径。</p>
+                {previewModalComponent.style === "link" ? (
+                  <button type="button" className="miduoke-preview-link-entry" onClick={() => void startPreviewConversation()}>
+                    {previewModalComponent.buttonText || "在线咨询"}
+                  </button>
+                ) : null}
+              </main>
+              {previewModalComponent.style !== "link" ? (
+                <div className="miduoke-preview-widget" style={{ borderColor: previewModalComponent.themeColor || "#1677ff" }}>
+                  <button
+                    type="button"
+                    style={{ background: previewModalComponent.themeColor || "#1677ff" }}
+                    onClick={() => void startPreviewConversation()}
+                  >
+                    <MessageCircle size={17} />
+                    {previewModalComponent.buttonText || "在线咨询"}
+                  </button>
+                  <div>
+                    <strong>{previewModalComponent.welcomeText || "您好，请问有什么可以帮您？"}</strong>
+                    <span>点击按钮后进入对话工作台测试会话。</span>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            {previewStartState.status !== "idle" ? (
+              <p className={`miduoke-modal-status ${previewStartState.status}`}>{previewStartState.message}</p>
+            ) : null}
+            <footer className="miduoke-modal-actions">
+              <button type="button" className="miduoke-secondary-button" onClick={() => setPreviewModalComponent(null)}>
+                关闭
+              </button>
+              <button type="button" className="miduoke-primary-button" onClick={() => void startPreviewConversation()}>
+                {previewStartState.status === "starting" ? "正在进入..." : "开始测试对话"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+      {configModalComponent ? (
+        <div className="miduoke-modal-backdrop" role="presentation">
+          <section className="miduoke-modal miduoke-config-modal" role="dialog" aria-modal="true" aria-label="配置网站客服">
+            <header className="miduoke-modal-head">
+              <div>
+                <h2>配置网站客服</h2>
+                <p>这些配置会用于后续写入 connector-config 的 public_config.components。</p>
+              </div>
+              <button type="button" className="miduoke-icon-button" aria-label="关闭" onClick={() => setConfigModalComponent(null)}>
+                <X size={18} />
+              </button>
+            </header>
+            <form className="miduoke-config-form" onSubmit={submitWebsiteConfig}>
+              <label>
+                <span>组件名称</span>
+                <input value={configDraft.name} onChange={(event) => setConfigDraft((current) => ({ ...current, name: event.target.value }))} />
+              </label>
+              <label>
+                <span>组件类型</span>
+                <select
+                  value={configDraft.componentType}
+                  onChange={(event) =>
+                    setConfigDraft((current) => ({ ...current, componentType: event.target.value as WebsiteComponentConfigDraft["componentType"] }))
+                  }
+                >
+                  <option value="插件型">插件型</option>
+                  <option value="链接型">链接型</option>
+                </select>
+              </label>
+              <label>
+                <span>挂载位置</span>
+                <input value={configDraft.mount} onChange={(event) => setConfigDraft((current) => ({ ...current, mount: event.target.value }))} />
+              </label>
+              <label>
+                <span>欢迎语</span>
+                <input
+                  value={configDraft.welcomeText}
+                  onChange={(event) => setConfigDraft((current) => ({ ...current, welcomeText: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span>主题色</span>
+                <input
+                  type="color"
+                  value={configDraft.themeColor}
+                  onChange={(event) => setConfigDraft((current) => ({ ...current, themeColor: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span>咨询按钮文案</span>
+                <input
+                  value={configDraft.buttonText}
+                  onChange={(event) => setConfigDraft((current) => ({ ...current, buttonText: event.target.value }))}
+                />
+              </label>
+              <label className="wide">
+                <span>允许域名</span>
+                <input
+                  value={configDraft.allowedOrigin}
+                  placeholder="https://example.com"
+                  onChange={(event) => setConfigDraft((current) => ({ ...current, allowedOrigin: event.target.value }))}
+                />
+              </label>
+              <footer className="miduoke-modal-actions wide">
+                <button type="button" className="miduoke-secondary-button" onClick={() => setConfigModalComponent(null)}>
+                  取消
+                </button>
+                <button type="submit" className="miduoke-primary-button">
+                  保存配置
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
 
   return (
     <section id="workspace-channels" className="channel-connector-center" data-channel-connector-smoke="center" aria-label="渠道配置准备与边界说明">
@@ -405,8 +1035,8 @@ export function ChannelConnectorCenterPanel({
                 </small>
               </div>
             )}
-            {"message" in channelAccountState && channelAccountState.message ? (
-              <p className={`channel-account-state-note ${channelAccountState.status}`}>{channelAccountState.message}</p>
+            {getChannelAccountStateMessage(channelAccountState) ? (
+              <p className={`channel-account-state-note ${channelAccountState.status}`}>{getChannelAccountStateMessage(channelAccountState)}</p>
             ) : null}
           </div>
 
@@ -676,6 +1306,355 @@ export function ChannelConnectorCenterPanel({
       </div>
     </section>
   );
+}
+
+function getChannelTableTitle(id: ChannelEntryId) {
+  const titles: Record<ChannelEntryId, string> = {
+    website: "接待组件列表",
+    wechat_official: "公众号列表",
+    wechat_miniapp: "微信小程序列表",
+    wecom: "企业微信列表"
+  };
+  return titles[id];
+}
+
+function getChannelSearchPlaceholder(id: ChannelEntryId) {
+  const placeholders: Record<ChannelEntryId, string> = {
+    website: "请输入组件名称",
+    wechat_official: "搜索公众号",
+    wechat_miniapp: "搜索小程序名称",
+    wecom: "搜索应用名称"
+  };
+  return placeholders[id];
+}
+
+function getChannelTableColumns(id: ChannelEntryId) {
+  const columns: Record<ChannelEntryId, string[]> = {
+    website: ["组件样式", "组件名称/类型", "挂载位置", "更新时间", "操作"],
+    wechat_official: ["公众号", "账号类型", "认证状态", "粉丝数", "互动粉丝数...", "接入方式", "接入时间"],
+    wechat_miniapp: ["微信小程序", "接入方式", "接入时间", "操作"],
+    wecom: ["企业微信", "应用名称", "企业ID", "应用ID", "接入时间", "操作"]
+  };
+  return columns[id];
+}
+
+function getChannelGridTemplate(id: ChannelEntryId) {
+  const templates: Record<ChannelEntryId, string> = {
+    website: "170px minmax(180px, 1fr) minmax(150px, 0.8fr) 160px 250px",
+    wechat_official: "180px 150px 150px 120px 120px 180px 140px",
+    wechat_miniapp: "minmax(220px, 1fr) minmax(220px, 1fr) 150px 220px",
+    wecom: "190px 190px 190px 130px 150px 210px"
+  };
+  return templates[id];
+}
+
+function getChannelAccessNotes(id: ChannelEntryId) {
+  const notes: Record<ChannelEntryId, string[]> = {
+    website: [],
+    wechat_official: [
+      "*你的公众号必须是认证过的微信订阅号或服务号，否则无法正常回复顾客对话",
+      "*接入后，之前设置好的菜单、自动回复等功能仍然有效"
+    ],
+    wechat_miniapp: [
+      "*接入前你的小程序需完成认证才能正常使用本功能",
+      "*接入后，所有小程序用户的客服消息会被转发到米多客"
+    ],
+    wecom: []
+  };
+  return notes[id];
+}
+
+function getChannelGuideSteps(id: ChannelEntryId) {
+  const steps: Record<ChannelEntryId, string[]> = {
+    website: [
+      "新建接待组件，确认组件样式和挂载位置。",
+      "完成域名校验后，把代码放到网站页面。",
+      "上线前先预览组件，确认按钮和聊天链接可打开。"
+    ],
+    wechat_official: [
+      "使用扫码接入或手动填写公众号开发配置。",
+      "确认公众号已认证，并拥有客服消息相关权限。",
+      "接入后检查菜单、自动回复和客服消息入口。"
+    ],
+    wechat_miniapp: [
+      "先确认小程序已完成认证并开启客服能力。",
+      "通过扫码或手动方式接入小程序。",
+      "在小程序页面中配置客服按钮或咨询入口。"
+    ],
+    wecom: [
+      "绑定企业微信账号，选择扫码或手动接入。",
+      "准备回调 URL、Token、EncodingAESKey 等配置。",
+      "完成后测试员工消息是否能进入统一接待。"
+    ]
+  };
+  return steps[id];
+}
+
+function getChannelApiFields(id: ChannelEntryId) {
+  const fields: Record<ChannelEntryId, Array<{ label: string; value: string }>> = {
+    website: [
+      { label: "script_key", value: "网站组件标识" },
+      { label: "allowed_origin", value: "域名白名单" },
+      { label: "visitor_id", value: "访客会话 ID" },
+      { label: "handoff_queue", value: "转人工队列" }
+    ],
+    wechat_official: [
+      { label: "appid / secret", value: "公众号凭证" },
+      { label: "server_url", value: "微信服务器回调 URL" },
+      { label: "token / aes_key", value: "签名校验与消息解密" },
+      { label: "openid", value: "客服消息收件人" }
+    ],
+    wechat_miniapp: [
+      { label: "appid / secret", value: "小程序凭证" },
+      { label: "open-type", value: "contact" },
+      { label: "session-from", value: "来源透传参数" },
+      { label: "message_card", value: "show-message-card / path" }
+    ],
+    wecom: [
+      { label: "corp_id / secret", value: "企业与微信客服凭证" },
+      { label: "callback_url", value: "API 接收消息地址" },
+      { label: "token / aes_key", value: "签名校验与消息解密" },
+      { label: "kf_id", value: "客服账号 / 会话分配" }
+    ]
+  };
+  return fields[id];
+}
+
+function getChannelBackendHooks(id: ChannelEntryId) {
+  const hooks: Record<ChannelEntryId, string[]> = {
+    website: ["POST /api/channels/website/widgets", "POST /api/conversations/visitor"],
+    wechat_official: ["POST /api/channels/wechat-official/callback", "POST /api/channels/wechat-official/custom-send"],
+    wechat_miniapp: ["POST /api/channels/wechat-miniapp/contact", "POST /api/channels/wechat-miniapp/message-push"],
+    wecom: ["POST /api/channels/wecom/callback", "POST /api/channels/wecom/kf/sync"]
+  };
+  return hooks[id];
+}
+
+const DEFAULT_CUSTOMER_PREVIEW_MESSAGES: CustomerPreviewMessage[] = [
+  { id: "welcome", role: "agent", text: "您好，这里是在线客服，请问有什么可以帮您？", time: "09:30" },
+  { id: "sample", role: "customer", text: "我想了解一下服务怎么接入。", time: "09:31" },
+  { id: "reply", role: "agent", text: "可以的，我们先确认接入渠道，再进入人工或自动接待测试。", time: "09:31" }
+];
+
+const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
+  {
+    id: "website",
+    label: "网站",
+    subtitle: "网页插件 / 聊天链接",
+    description:
+      "*客户与企业通过接待组件建立联系。通过接待组件，客户可快速向客服发起咨询，企业可把接待组件挂载在不同渠道来全面触达客户。",
+    componentQuota: 1,
+    setupHint: "适合先做顾客端前端调试，后续可接入真实网站脚本。",
+    primaryAction: "新建接待组件",
+    secondaryAction: "域名校验设置",
+    components: [
+      {
+        id: "website-widget",
+        name: "网页插件",
+        componentType: "插件型",
+        style: "widget",
+        mount: "官网右下角",
+        status: "enabled",
+        updatedAt: "2026-07-07 09:30",
+        description: "网页右下角浮窗，顾客可直接打开聊天。"
+      },
+      {
+        id: "website-link",
+        name: "聊天链接",
+        componentType: "链接型",
+        style: "link",
+        mount: "导航 / 按钮 / 落地页",
+        status: "enabled",
+        updatedAt: "2026-07-07 09:30",
+        description: "可复制到按钮、菜单或二维码里的顾客咨询链接。"
+      }
+    ]
+  },
+  {
+    id: "wechat_official",
+    label: "微信公众号",
+    subtitle: "菜单入口 / 客服消息",
+    description: "通过公众号菜单、自动回复或客服消息入口承接客户咨询；正式接入需要公众号后台开发配置和消息权限。",
+    componentQuota: 2,
+    setupHint: "当前先预览顾客从公众号菜单进入咨询的效果。",
+    primaryAction: "新建公众号入口",
+    secondaryAction: "开发配置",
+    components: [
+      {
+        id: "official-menu",
+        name: "公众号菜单入口",
+        componentType: "菜单型",
+        style: "menu",
+        mount: "公众号底部菜单",
+        status: "draft",
+        updatedAt: "2026-07-07 09:30",
+        description: "顾客点击公众号菜单后打开客服咨询页。"
+      },
+      {
+        id: "official-keyword",
+        name: "关键词咨询链接",
+        componentType: "链接型",
+        style: "link",
+        mount: "自动回复 / 图文",
+        status: "planned",
+        updatedAt: "2026-07-07 09:30",
+        description: "在自动回复或图文里放置咨询入口。"
+      }
+    ]
+  },
+  {
+    id: "wechat_miniapp",
+    label: "微信小程序",
+    subtitle: "小程序客服按钮 / 页面入口",
+    description: "把客服入口放入小程序页面或订单/服务流程中，便于顾客在微信内直接发起咨询。",
+    componentQuota: 2,
+    setupHint: "当前先模拟小程序页面中的客服按钮。",
+    primaryAction: "新建小程序入口",
+    secondaryAction: "页面配置",
+    components: [
+      {
+        id: "miniapp-service-button",
+        name: "客服按钮",
+        componentType: "小程序组件",
+        style: "miniapp",
+        mount: "我的 / 订单 / 售后页",
+        status: "draft",
+        updatedAt: "2026-07-07 09:30",
+        description: "顾客在小程序内点击客服按钮进入咨询。"
+      },
+      {
+        id: "miniapp-page-entry",
+        name: "咨询页面入口",
+        componentType: "页面入口",
+        style: "link",
+        mount: "活动页 / 帮助中心",
+        status: "planned",
+        updatedAt: "2026-07-07 09:30",
+        description: "把咨询入口嵌入小程序业务页面。"
+      }
+    ]
+  },
+  {
+    id: "wecom",
+    label: "企业微信",
+    subtitle: "微信客服链接 / 二维码",
+    description: "通过企业微信客服链接、二维码或微信内入口承接客户咨询；正式接入需要回调 URL、Token 和 EncodingAESKey。",
+    componentQuota: 2,
+    setupHint: "当前先模拟客户从企业微信客服链接进入咨询。",
+    primaryAction: "新建企微入口",
+    secondaryAction: "回调配置",
+    components: [
+      {
+        id: "wecom-service-link",
+        name: "客服链接",
+        componentType: "链接型",
+        style: "link",
+        mount: "微信内链接 / 官网按钮",
+        status: "draft",
+        updatedAt: "2026-07-07 09:30",
+        description: "顾客点击链接进入企业微信客服会话。"
+      },
+      {
+        id: "wecom-qrcode",
+        name: "客服二维码",
+        componentType: "二维码型",
+        style: "qrcode",
+        mount: "门店 / 海报 / 官网",
+        status: "planned",
+        updatedAt: "2026-07-07 09:30",
+        description: "顾客扫码进入企业微信客服。"
+      }
+    ]
+  }
+];
+
+function ChannelEntryIcon({ id }: { id: ChannelEntryId }) {
+  if (id === "website") {
+    return <Globe2 size={16} />;
+  }
+  if (id === "wechat_miniapp") {
+    return <Smartphone size={16} />;
+  }
+  if (id === "wecom") {
+    return <Building2 size={16} />;
+  }
+  return <MessageCircle size={16} />;
+}
+
+function ChannelComponentPreviewIcon({ style }: { style: ChannelAccessComponent["style"] }) {
+  const icon =
+    style === "widget" ? <Code2 size={20} /> :
+    style === "miniapp" ? <Smartphone size={20} /> :
+    style === "qrcode" ? <Copy size={20} /> :
+    style === "menu" ? <MessageCircle size={20} /> :
+    <Link2 size={20} />;
+  return <i className={`channel-component-icon ${style}`}>{icon}</i>;
+}
+
+function formatChannelComponentStatus(status: ChannelAccessComponent["status"]) {
+  const labels: Record<ChannelAccessComponent["status"], string> = {
+    enabled: "开启",
+    draft: "草稿",
+    planned: "待配置"
+  };
+  return labels[status];
+}
+
+function normalizeChannelEntryId(value: string | undefined): ChannelEntryId {
+  return CHANNEL_ENTRY_DEFINITIONS.some((entry) => entry.id === value) ? (value as ChannelEntryId) : "website";
+}
+
+function buildCustomerAccessSnippet(entry: ChannelEntryDefinition, component?: ChannelAccessComponent, tenantId?: string | number) {
+  const componentId = component?.id ?? "customer-entry";
+  if (entry.id === "website") {
+    return `<script type="text/javascript">
+  window._WANFA = window._WANFA || function () { (_WANFA.a = _WANFA.a || []).push(arguments); };
+  _WANFA("cptid", "${componentId}");
+  _WANFA("tenantId", "${tenantId ?? 1}");
+  _WANFA("domain", "web.zixunkefu.net");
+  _WANFA("apiBase", "https://web.zixunkefu.net");
+  _WANFA("channel", "website");
+  _WANFA("mode", "${component?.style === "link" ? "link" : "widget"}");
+  _WANFA("position", "${component?.position || "right-bottom"}");
+  _WANFA("buttonText", "${component?.buttonText || "在线咨询"}");
+  (function (w, d, q, j, s) {
+    j = d.createElement(q), s = d.getElementsByTagName(q)[0];
+    j.async = true;
+    j.charset = "UTF-8";
+    j.src = ("https:" == document.location.protocol ? "https://" : "http://") + "web.zixunkefu.net/Web/js/customer-widget.js?_=t";
+    s.parentNode.insertBefore(j, s);
+  })(window, document, "script");
+</script>`;
+  }
+  if (entry.id === "wechat_miniapp") {
+    return `<button open-type="contact"
+  session-from="${componentId}"
+  show-message-card="true">
+  在线咨询
+</button>`;
+  }
+  return `https://web.wanfa.local/client/chat?channel=${entry.id}&component=${componentId}`;
+}
+
+function createWebsiteConfigDraft(component?: ChannelAccessComponent): WebsiteComponentConfigDraft {
+  return {
+    name: component?.name ?? "网页插件",
+    componentType: component?.componentType === "链接型" ? "链接型" : "插件型",
+    mount: component?.mount ?? "官网右下角",
+    welcomeText: component?.welcomeText ?? "您好，请问有什么可以帮您？",
+    themeColor: component?.themeColor ?? "#1677ff",
+    buttonText: component?.buttonText ?? "在线咨询",
+    allowedOrigin: component?.allowedOrigin ?? "https://example.com"
+  };
+}
+
+function formatChannelComponentUpdatedAt(value: Date) {
+  const pad = (item: number) => String(item).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
+function getChannelAccountStateMessage(state: ChannelAccountState) {
+  return "message" in state ? state.message : "";
 }
 
 const CHANNEL_ACCESS_LAYERS: Array<{ id: ChannelAccessLayer; label: string; description: string }> = [

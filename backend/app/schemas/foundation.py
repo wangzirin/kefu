@@ -43,6 +43,8 @@ class UserRead(BaseModel):
     email: str
     status: str
     roles: List[str] = Field(default_factory=list)
+    avatar_data_url: str = ""
+    public_profile: dict = Field(default_factory=dict)
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}

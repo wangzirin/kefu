@@ -366,6 +366,20 @@ def apply_conversation_workflow_action(
         conversation.assigned_user_id = payload.target_user_id
         conversation.assigned_team_id = payload.target_team_id
         conversation.status = "handoff"
+    elif payload.action == "close":
+        now = utc_now()
+        conversation.status = "closed"
+        conversation.last_message_at = now
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                direction="outbound",
+                sender_type="system",
+                content="客服已关闭对话",
+                external_message_id=f"local-close-{conversation.id}-{int(now.timestamp())}",
+                created_at=now,
+            )
+        )
     elif payload.action == "resolve":
         conversation.status = "resolved"
     elif payload.action == "follow_up":

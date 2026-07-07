@@ -98,6 +98,8 @@ def _user_payload(db: Session, user: User) -> dict:
         "email": user.email,
         "status": user.status,
         "roles": _user_role_codes(db, user.id),
+        "avatar_data_url": user.avatar_data_url,
+        "public_profile": user.public_profile or {},
         "created_at": user.created_at,
     }
 

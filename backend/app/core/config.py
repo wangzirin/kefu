@@ -14,6 +14,7 @@ def _split_origins(value: str) -> Tuple[str, ...]:
             "http://localhost:5174",
             "http://127.0.0.1:5188",
             "http://localhost:5188",
+            "null",
         ]
     )
 
@@ -91,7 +92,7 @@ def get_settings() -> Settings:
                 "STANDARD_OPS_ALLOWED_ORIGINS",
                 "http://127.0.0.1:5173,http://localhost:5173,"
                 "http://127.0.0.1:5174,http://localhost:5174,"
-                "http://127.0.0.1:5188,http://localhost:5188",
+                "http://127.0.0.1:5188,http://localhost:5188,null",
             )
         ),
         bailian_api_base=os.getenv("BAILIAN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),

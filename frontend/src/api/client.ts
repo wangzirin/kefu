@@ -97,6 +97,8 @@ export interface AccountUser {
   email: string;
   status: string;
   roles: string[];
+  avatar_data_url?: string;
+  public_profile?: Partial<UserPublicProfile>;
   created_at: string | null;
 }
 
@@ -1223,6 +1225,7 @@ export type ConversationWorkflowActionName =
   | "claim"
   | "release"
   | "transfer"
+  | "close"
   | "resolve"
   | "follow_up"
   | "wait_customer"

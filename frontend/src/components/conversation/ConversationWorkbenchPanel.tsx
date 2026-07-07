@@ -19,7 +19,8 @@ import {
   type MessageRead,
   type OutboxDeliveryJob,
   type OutboxDraft,
-  type ReplyDecision
+  type ReplyDecision,
+  type UserPublicProfile
 } from "../../api/client";
 type ConversationInboxState =
   | { status: "idle"; message: string; data: ConversationInboxList }
@@ -64,9 +65,12 @@ export interface ChannelIdentitySummary {
 export interface WorkbenchColleague {
   id: number;
   name: string;
+  email?: string;
   role: string;
   status: string;
   activeChats: number;
+  avatarDataUrl?: string;
+  publicProfile?: Partial<UserPublicProfile>;
 }
 
 export interface ConversationWorkbenchPanelProps {
@@ -99,7 +103,13 @@ export interface ConversationWorkbenchPanelProps {
   onCreateSafeTestConversation?: () => void;
   onSelectConversation: (conversationId: number) => void;
   onSendLocalReply: (item: ConversationInboxItem, content: string) => void;
-  onWorkflowAction: (item: ConversationInboxItem, action: ConversationWorkflowActionName, note?: string) => void;
+  onWorkflowAction: (
+    item: ConversationInboxItem,
+    action: ConversationWorkflowActionName,
+    note?: string,
+    targetUserId?: number | null,
+    targetTeamId?: number | null
+  ) => void;
   onApproveReviewDraft: (item: HumanReviewInboxItem, finalReply: string, resolutionNote: string) => void;
   onConfirmOutboxDraft: (draftId: number) => void;
 }
@@ -139,12 +149,16 @@ export function ConversationWorkbenchPanel({
   const [conversationSearch, setConversationSearch] = useState("");
   const [quickReplyTab, setQuickReplyTab] = useState<"personal" | "customer" | "custom">("personal");
   const [isTransferOpen, setIsTransferOpen] = useState(false);
+  const [transferTargetUserId, setTransferTargetUserId] = useState("");
+  const [transferNote, setTransferNote] = useState("");
   const [workflowNotice, setWorkflowNotice] = useState("");
   const validTargetQueue = normalizeWorkbenchQueueKey(targetQueue);
 
   const conversations = state.data.items;
   const scopedConversations = useMemo(
-    () => (targetChannelId === null ? conversations : conversations.filter((item) => item.channel_id === targetChannelId)),
+    () =>
+      (targetChannelId === null ? conversations : conversations.filter((item) => item.channel_id === targetChannelId))
+        .filter((item) => !["closed", "resolved"].includes(item.status)),
     [conversations, targetChannelId]
   );
   const searchedConversations = useMemo(() => {
@@ -300,7 +314,19 @@ export function ConversationWorkbenchPanel({
     setEditableDraft(draftText);
     setWorkflowNotice("");
     setIsTransferOpen(false);
+    setTransferTargetUserId("");
+    setTransferNote("");
   }, [selectedConversation?.id, relatedReview?.id, latestDraft?.id, draftText]);
+
+  useEffect(() => {
+    if (!isTransferOpen || transferTargetUserId) {
+      return;
+    }
+    const firstAvailableColleague = colleagues.find((colleague) => colleague.status !== "offline") ?? colleagues[0];
+    if (firstAvailableColleague) {
+      setTransferTargetUserId(String(firstAvailableColleague.id));
+    }
+  }, [colleagues, isTransferOpen, transferTargetUserId]);
 
   useEffect(() => {
     if (validTargetQueue) {
@@ -311,50 +337,23 @@ export function ConversationWorkbenchPanel({
   const isLoading = state.status === "loading";
   const pendingCount = scopedConversations.filter((item) => item.last_message_direction === "inbound").length;
   const handoffCount = scopedConversations.filter(hasManualGateSignal).length;
-  const activeQueueLabel = queueDefinitions.find((queue) => queue.key === activeQueue)?.label ?? "全部";
-
   if (!selectedConversation) {
-    const canCreateSafeTestConversation = Boolean(onCreateSafeTestConversation) && hasToken && canManageConversations && !isLoading;
     return (
-      <section className="panel conversation-workbench conversation-workbench-shell service-desk-shell" id="workspace-live" aria-label="多渠道对话台">
-        <div className="panel-heading service-desk-heading">
-          <div>
-            <span className="section-kicker">坐席工作区</span>
-            <h2>多渠道对话台</h2>
-            <p>等待可信入站会话。当前队列没有匹配项，不代表真实渠道已经接通。</p>
-          </div>
-          <button type="button" className="ghost-action service-refresh-action" onClick={onRefresh} disabled={!hasToken || isLoading}>
-            <RefreshCw size={16} />
-            刷新队列
-          </button>
-        </div>
-        <QueueTabs queues={queueDefinitions} activeQueue={activeQueue} onSelect={setActiveQueue} />
-        <div className="workspace-state-notice tone-empty compact" data-state-system="notice" data-state-kind="empty" role="status">
-          <span className="workspace-state-icon" aria-hidden="true">
-            <MessageSquare size={16} />
-          </span>
-          <div>
-            <strong>暂无数据</strong>
-            <p>
-              “{activeQueueLabel}”队列暂无会话。{targetChannelId !== null ? `当前还限定在渠道 #${targetChannelId}。` : ""}
-              可以先生成一条本地测试会话体验接待路径；它只写入本地数据库，不触发任何平台外发。
-            </p>
-            <button
-              type="button"
-              className="secondary-action"
-              disabled={!canCreateSafeTestConversation}
-              onClick={onCreateSafeTestConversation}
-              title={
-                canCreateSafeTestConversation
-                  ? "生成一条本地测试会话"
-                  : "需要登录并具备会话管理权限"
-              }
-            >
-              <MessageSquare size={15} />
-              生成本地测试会话
-            </button>
+      <section className="conversation-workbench-empty" id="workspace-live" aria-label="暂无会话">
+        <div className="conversation-empty-illustration" aria-hidden="true">
+          <span className="empty-blob" />
+          <span className="empty-dot empty-dot-primary" />
+          <span className="empty-dot empty-dot-small empty-dot-left" />
+          <span className="empty-dot empty-dot-small empty-dot-right" />
+          <span className="empty-plus empty-plus-left">+</span>
+          <div className="empty-person">
+            <span className="empty-person-head" />
+            <span className="empty-person-hair" />
+            <span className="empty-person-body" />
+            <span className="empty-person-arm" />
           </div>
         </div>
+        <p>上午好~今天也要元气满满呦!</p>
       </section>
     );
   }
@@ -451,17 +450,28 @@ export function ConversationWorkbenchPanel({
     ]
   };
   const selectedQuickReplyGroups = quickReplyTemplates[quickReplyTab];
+  const selectedTransferColleague = colleagues.find((colleague) => String(colleague.id) === transferTargetUserId) ?? null;
+  const canSubmitTransfer =
+    hasToken &&
+    canManageConversations &&
+    selectedTransferColleague !== null &&
+    selectedTransferColleague.status !== "offline" &&
+    !isLoading;
   const insertQuickReply = (text: string) => {
     setEditableDraft((current) => (current.trim() ? `${current.trim()}\n${text}` : text));
   };
   const handleEndConversation = () => {
-    setWorkflowNotice("已标记结束对话。预览模式不会关闭真实渠道会话。");
-    onWorkflowAction(selectedConversation, "resolve", "坐席结束当前对话");
+    setWorkflowNotice("已关闭对话，客户侧将显示“客服已关闭对话”。");
+    onWorkflowAction(selectedConversation, "close", "坐席关闭当前对话，客户侧显示关闭提示。");
   };
-  const handleTransferConversation = (colleague: WorkbenchColleague) => {
-    setWorkflowNotice(`已发起转接给 ${colleague.name}。预览模式只更新本地提示。`);
+  const handleTransferConversation = () => {
+    if (!selectedTransferColleague) {
+      return;
+    }
+    const note = transferNote.trim() || `坐席申请转接给 ${selectedTransferColleague.name}`;
+    setWorkflowNotice(`已发起转接给 ${selectedTransferColleague.name}。`);
     setIsTransferOpen(false);
-    onWorkflowAction(selectedConversation, "transfer", `坐席申请转接给 ${colleague.name}`);
+    onWorkflowAction(selectedConversation, "transfer", note, selectedTransferColleague.id, null);
   };
 
   return (
@@ -542,23 +552,41 @@ export function ConversationWorkbenchPanel({
                       <UserRound size={18} />
                     </button>
                     {isTransferOpen ? (
-                      <div className="miduoke-transfer-menu" role="menu" aria-label="转接给同事">
-                        {colleagues.map((colleague) => (
-                          <button
-                            type="button"
-                            key={colleague.id}
-                            role="menuitem"
-                            disabled={colleague.status === "offline"}
-                            onClick={() => handleTransferConversation(colleague)}
+                      <section className="miduoke-transfer-dialog" role="dialog" aria-modal="false" aria-label="转接会话">
+                        <header>
+                          <strong>转接会话</strong>
+                          <button type="button" aria-label="关闭转接窗口" onClick={() => setIsTransferOpen(false)}>×</button>
+                        </header>
+                        <label>
+                          <span>转接给</span>
+                          <select
+                            value={transferTargetUserId}
+                            onChange={(event) => setTransferTargetUserId(event.target.value)}
                           >
-                            <i className={`colleague-status-dot is-${colleague.status}`} aria-hidden="true" />
-                            <span>
-                              <strong>{colleague.name}</strong>
-                              <small>{formatColleagueStatus(colleague.status)} · {colleague.activeChats} 个会话</small>
-                            </span>
+                            {colleagues.length === 0 ? <option value="">暂无同事</option> : null}
+                            {colleagues.map((colleague) => (
+                              <option key={colleague.id} value={colleague.id} disabled={colleague.status === "offline"}>
+                                {colleague.name} · {formatColleagueStatus(colleague.status)} · {colleague.activeChats} 个会话
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>转接备注</span>
+                          <textarea
+                            value={transferNote}
+                            onChange={(event) => setTransferNote(event.target.value)}
+                            placeholder="填写需要交接的客户背景、已处理事项或注意点"
+                            rows={4}
+                          />
+                        </label>
+                        <footer>
+                          <button type="button" onClick={() => setIsTransferOpen(false)}>取消</button>
+                          <button type="button" className="primary" disabled={!canSubmitTransfer} onClick={handleTransferConversation}>
+                            确认转接
                           </button>
-                        ))}
-                      </div>
+                        </footer>
+                      </section>
                     ) : null}
                   </span>
                   <button type="button" title="结束对话" onClick={handleEndConversation}>
@@ -1037,7 +1065,9 @@ function buildConversationTimeline({
   });
   const events: ConversationTimelineEvent[] = sortedMessages.map((message) => {
     const outbound = message.direction === "outbound";
-    const kind: ConversationTimelineEvent["kind"] = outbound
+    const kind: ConversationTimelineEvent["kind"] = message.sender_type === "system"
+      ? "system"
+      : outbound
       ? message.sender_type === "ai"
         ? "ai"
         : "agent"
@@ -1045,7 +1075,11 @@ function buildConversationTimeline({
     return {
       id: `message-${message.id}`,
       kind,
-      title: outbound ? (message.sender_type === "ai" ? "AI 建议" : "坐席") : conversation.contact_display_name || `联系人 #${conversation.contact_id}`,
+      title: kind === "system"
+        ? "系统消息"
+        : outbound
+          ? (message.sender_type === "ai" ? "AI 建议" : "坐席")
+          : conversation.contact_display_name || `联系人 #${conversation.contact_id}`,
       text: message.content || "空消息",
       meta: `${outbound ? "本地记录" : conversation.channel_name} · ${formatDateTime(message.created_at)}`
     };

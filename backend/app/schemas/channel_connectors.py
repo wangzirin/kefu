@@ -120,6 +120,27 @@ class ChannelWebhookEventCreate(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class WebsiteWidgetMessageCreate(BaseModel):
+    tenant_id: int | None = None
+    tenant_slug: str = Field(default="", max_length=80)
+    component_id: str = Field(default="website-widget", max_length=120)
+    visitor_id: str = Field(default="", max_length=120)
+    visitor_name: str = Field(default="网站访客", max_length=120)
+    text: str = Field(min_length=1, max_length=4000)
+    page_url: str = Field(default="", max_length=1000)
+    page_title: str = Field(default="", max_length=300)
+
+
+class WebsiteWidgetMessageRead(BaseModel):
+    tenant_id: int
+    channel_id: int
+    contact_id: int | None = None
+    conversation_id: int | None = None
+    message_id: int | None = None
+    status: str
+    next_action: str
+
+
 class ChannelDeliveryReceiptRead(BaseModel):
     id: int
     tenant_id: int

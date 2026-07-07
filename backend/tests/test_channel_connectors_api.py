@@ -190,6 +190,41 @@ def test_channel_connector_config_and_noop_send_plan_never_external_writes(clien
     assert "channel_connector.send_plan_created" in actions
 
 
+def test_public_website_widget_message_enters_conversation_inbox(client) -> None:
+    tenant, token = _bootstrap_owner(
+        client,
+        slug="website-widget-public",
+        email="website-widget-public@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    widget_res = client.post(
+        "/api/public/website-widget/messages",
+        json={
+            "tenant_id": tenant["id"],
+            "component_id": "website-widget",
+            "visitor_id": "visitor-public-001",
+            "visitor_name": "官网访客",
+            "text": "我想咨询餐饮门店怎么接入 AI 客服",
+            "page_url": "https://example.com/",
+            "page_title": "餐饮行业 AI 转型专家",
+        },
+    )
+
+    assert widget_res.status_code == 201
+    widget = widget_res.json()
+    assert widget["tenant_id"] == tenant["id"]
+    assert widget["status"] == "trusted_inbound_message_created"
+    assert widget["conversation_id"]
+    assert widget["message_id"]
+
+    inbox_res = client.get(f"/api/tenants/{tenant['id']}/conversation-inbox", headers=headers)
+    assert inbox_res.status_code == 200
+    inbox = inbox_res.json()
+    assert inbox["total"] >= 1
+    assert any(item["id"] == widget["conversation_id"] for item in inbox["items"])
+
+
 def test_channel_account_identity_config_is_readable_and_does_not_enable_external_write(client) -> None:
     tenant, token = _bootstrap_owner(client, slug="channel-account-demo", email="channel-account@example.com")
     headers = {"Authorization": f"Bearer {token}"}
