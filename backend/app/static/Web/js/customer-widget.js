@@ -38,12 +38,12 @@
     ".wanfa-widget{width:320px;color:#142033;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif}",
     ".wanfa-button{display:flex;align-items:center;gap:8px;margin-left:auto;border:0;border-radius:999px;background:#1677ff;color:#fff;padding:12px 18px;box-shadow:0 14px 30px rgba(22,119,255,.28);font-size:14px;font-weight:700;cursor:pointer}",
     ".wanfa-button:hover{background:#0f63d8}",
-    ".wanfa-panel{display:none;margin-bottom:12px;overflow:hidden;border:1px solid #dce6f2;border-radius:12px;background:#fff;box-shadow:0 22px 52px rgba(15,35,64,.22)}",
-    ".wanfa-panel.open{display:block}",
+    ".wanfa-panel{display:none;width:320px;height:min(520px,calc(100vh - 104px));min-height:360px;margin-bottom:12px;overflow:hidden;border:1px solid #dce6f2;border-radius:12px;background:#fff;box-shadow:0 22px 52px rgba(15,35,64,.22)}",
+    ".wanfa-panel.open{display:flex;flex-direction:column}",
     ".wanfa-head{display:flex;align-items:center;justify-content:space-between;background:#1677ff;color:#fff;padding:14px 16px}",
     ".wanfa-head strong{font-size:15px}",
     ".wanfa-close{border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer}",
-    ".wanfa-body{padding:16px;background:#f8fbff}",
+    ".wanfa-body{flex:1;min-height:0;overflow-y:auto;padding:16px;background:#f8fbff;scroll-behavior:smooth}",
     ".wanfa-msg{margin:0 0 12px;border-radius:10px;background:#fff;color:#23364d;padding:12px 13px;font-size:14px;line-height:1.55;box-shadow:0 1px 0 rgba(15,35,64,.06)}",
     ".wanfa-msg.agent{background:#eaf3ff;color:#153a66}",
     ".wanfa-msg.system{background:#f1f4f8;color:#607086;text-align:center}",
@@ -55,7 +55,8 @@
     ".wanfa-input input{flex:1;min-width:0;border:1px solid #d7dfea;border-radius:8px;padding:10px 11px;font-size:13px;outline:none}",
     ".wanfa-input button{border:0;border-radius:8px;background:#1677ff;color:#fff;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer}",
     ".wanfa-input button:disabled{background:#b8c4d2;cursor:not-allowed}",
-    ".wanfa-note{margin:10px 0 0;color:#71839a;font-size:12px;line-height:1.45}"
+    ".wanfa-note{margin:10px 0 0;color:#71839a;font-size:12px;line-height:1.45}",
+    "@media (max-width:420px){.wanfa-widget,.wanfa-panel{width:calc(100vw - 32px)}.wanfa-panel{height:min(520px,calc(100vh - 96px));min-height:340px}}"
   ].join("");
 
   var wrapper = document.createElement("div");
@@ -106,6 +107,7 @@
     message.className = type ? "wanfa-msg " + type : "wanfa-msg";
     message.textContent = text;
     body.appendChild(message);
+    body.scrollTop = body.scrollHeight;
     return message;
   }
 
