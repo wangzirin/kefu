@@ -99,9 +99,10 @@ export const navigationGroups: NavigationGroup[] = [
     visibleTo: ["owner", "admin", "viewer"],
     items: [
       { label: "网站", href: "#channels?channel=website", count: "网页", active: false },
+      { label: "微信客服", href: "#channels?channel=wechat_kf", count: "客服", active: false },
+      { label: "企业微信", href: "#channels?channel=wecom", count: "企微", active: false },
       { label: "微信公众号", href: "#channels?channel=wechat_official", count: "公众号", active: false },
-      { label: "微信小程序", href: "#channels?channel=wechat_miniapp", count: "小程序", active: false },
-      { label: "企业微信", href: "#channels?channel=wecom", count: "企微", active: false }
+      { label: "微信小程序", href: "#channels?channel=wechat_miniapp", count: "小程序", active: false }
     ]
   },
   {

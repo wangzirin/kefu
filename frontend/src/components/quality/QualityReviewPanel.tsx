@@ -1133,7 +1133,7 @@ export function QualityReviewPanel({
                       <b>{action.next_step}</b>
                     </a>
                   )) : (
-                    <WorkspaceStateNotice kind="empty" message="本月复盘动作已处理，继续保持同题集回归。" compact />
+                    <WorkspaceStateNotice kind="empty" message="本月复盘动作已完成，继续保持同题集回归。" compact />
                   )}
                 </div>
               </div>
@@ -1340,7 +1340,7 @@ export function QualityReviewPanel({
                   <p>{action.next_step}</p>
                 </article>
               )) : (
-                <WorkspaceStateNotice kind="empty" message="当前客户报告动作已处理，继续保持同题集回归和月度抽样。" compact />
+                <WorkspaceStateNotice kind="empty" message="当前客户报告动作已完成，继续保持同题集回归和月度抽样。" compact />
               )}
             </div>
             <div className="customer-report-boundary">

@@ -23,6 +23,8 @@ export default function KnowledgePage({ ctx }: WorkspacePageProps) {
         customerQualityReport={ctx.customerQualityReport}
         customerQualityReportSignoffs={ctx.customerQualityReportSignoffs}
         updatePackageDraft={ctx.knowledgeUpdatePackageDraft}
+        templateImportDraft={ctx.knowledgeTemplateImportDraft}
+        aiServiceStatus={ctx.aiServiceStatus}
         replyStrategyState={ctx.tenantReplyStrategy}
         replyStrategyDraft={ctx.replyStrategyDraft}
         businessObjectDraft={ctx.businessObjectDraft}
@@ -42,6 +44,11 @@ export default function KnowledgePage({ ctx }: WorkspacePageProps) {
         onCreateBusinessObject={() => void ctx.handleSaveBusinessObject()}
         onPreviewUpdatePackage={() => void ctx.handlePreviewKnowledgeUpdatePackage()}
         onImportUpdatePackage={() => void ctx.handleImportKnowledgeUpdatePackage()}
+        onTemplateImportDraftChange={ctx.setKnowledgeTemplateImportDraft}
+        onPrecheckTemplateImport={() => void ctx.handlePrecheckKnowledgeTemplateImport()}
+        onCreateTemplateImport={() => void ctx.handleCreateKnowledgeTemplateImport()}
+        onRunTemplateSample={() => void ctx.handleRunKnowledgeTemplateSample()}
+        onPublishTemplateImport={() => void ctx.handlePublishKnowledgeTemplateImport()}
         onSaveReplyStrategy={() => void ctx.handleSaveTenantReplyStrategy()}
         onCreateObjectKnowledgeCard={() => void ctx.handleCreateObjectKnowledgeCard()}
         onImportDocument={() => void ctx.handleImportKnowledgeDocument()}

@@ -58,6 +58,11 @@ from app.schemas.knowledge import (
     KnowledgeGapSyncRead,
     KnowledgeGapRead,
     KnowledgeGapUpdate,
+    KnowledgeImportCreate,
+    KnowledgeImportPrecheckCreate,
+    KnowledgeImportPrecheckRead,
+    KnowledgeImportRead,
+    KnowledgeImportSampleRunRead,
     KnowledgeMemoryMeshOverviewRead,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
@@ -66,6 +71,10 @@ from app.schemas.knowledge import (
     KnowledgeUpdatePackageResultRead,
     KnowledgeUpdatePackageRollbackCreate,
     KnowledgeUpdatePackageRollbackRead,
+    KnowledgePublicationCreate,
+    KnowledgePublicationRead,
+    KnowledgePublicationRollbackCreate,
+    KnowledgePublicationRollbackRead,
     KnowledgeVectorIndexPlanCreate,
     KnowledgeVectorIndexPlanRead,
     KnowledgeVectorIndexRebuildCreate,
@@ -87,6 +96,7 @@ from app.services.knowledge import (
     create_knowledge_evaluation_set,
     create_knowledge_gap_document_draft,
     create_knowledge_gap_regression_case,
+    create_knowledge_import,
     create_knowledge_vector_index_plan,
     create_object_knowledge_card,
     download_customer_quality_report_archive,
@@ -127,7 +137,11 @@ from app.services.knowledge import (
     update_business_object,
     update_knowledge_gap,
     import_knowledge_update_package,
+    precheck_knowledge_import,
     preview_knowledge_update_package,
+    publish_knowledge_import,
+    rollback_knowledge_publication,
+    run_knowledge_import_sample,
 )
 from app.services.llm_ops import get_llm_ops_readiness_summary
 from app.services.rag_governance import get_rag_cost_governance_summary
@@ -139,6 +153,80 @@ KNOWLEDGE_MANAGE_PERMISSION = "knowledge.manage"
 QUALITY_READ_PERMISSION = "quality.read"
 CUSTOMER_REPORT_SIGNOFF_PERMISSION = "accounts.manage"
 OPS_METRICS_READ_PERMISSION = "ops.metrics.read"
+
+
+@router.post(
+    "/tenants/{tenant_id}/knowledge-imports/precheck",
+    response_model=KnowledgeImportPrecheckRead,
+)
+def precheck_tenant_knowledge_import(
+    tenant_id: int,
+    payload: KnowledgeImportPrecheckCreate,
+    principal: CurrentPrincipal = Depends(require_permission(KNOWLEDGE_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> KnowledgeImportPrecheckRead:
+    return precheck_knowledge_import(db, tenant_id, payload, principal)
+
+
+@router.post(
+    "/tenants/{tenant_id}/knowledge-imports",
+    response_model=KnowledgeImportRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_tenant_knowledge_import(
+    tenant_id: int,
+    payload: KnowledgeImportCreate,
+    principal: CurrentPrincipal = Depends(require_permission(KNOWLEDGE_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    return create_knowledge_import(db, tenant_id, payload, principal)
+
+
+@router.post(
+    "/tenants/{tenant_id}/knowledge-imports/{import_id}/sample-run",
+    response_model=KnowledgeImportSampleRunRead,
+)
+def run_tenant_knowledge_import_sample(
+    tenant_id: int,
+    import_id: int,
+    principal: CurrentPrincipal = Depends(require_permission(KNOWLEDGE_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> KnowledgeImportSampleRunRead:
+    if tenant_id != principal.tenant.id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="tenant not found")
+    return run_knowledge_import_sample(db, import_id, principal)
+
+
+@router.post(
+    "/tenants/{tenant_id}/knowledge-publications",
+    response_model=KnowledgePublicationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def publish_tenant_knowledge_import(
+    tenant_id: int,
+    payload: KnowledgePublicationCreate,
+    principal: CurrentPrincipal = Depends(require_permission(KNOWLEDGE_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> KnowledgePublicationRead:
+    return publish_knowledge_import(db, tenant_id, payload, principal)
+
+
+@router.post(
+    "/tenants/{tenant_id}/knowledge-publications/{version_id}/rollback",
+    response_model=KnowledgePublicationRollbackRead,
+)
+def rollback_tenant_knowledge_import_publication(
+    tenant_id: int,
+    version_id: int,
+    payload: KnowledgePublicationRollbackCreate,
+    principal: CurrentPrincipal = Depends(require_permission(KNOWLEDGE_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> KnowledgePublicationRollbackRead:
+    if tenant_id != principal.tenant.id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="tenant not found")
+    return rollback_knowledge_publication(db, version_id, payload, principal)
 
 
 @router.post(

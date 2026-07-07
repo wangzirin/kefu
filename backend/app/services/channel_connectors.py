@@ -27,13 +27,19 @@ from app.schemas.channel_connectors import (
     ChannelWebhookEventCreate,
     ConnectorSendPlanCreate,
     WebsiteWidgetMessageCreate,
+    ChannelConnectorSecretUpsert,
 )
 from app.services.channel_provider_registry import (
     get_channel_provider_contract,
     list_channel_provider_contracts,
     normalize_provider,
 )
-from app.services.channel_secret_store import connector_secret_status, resolve_webhook_secret_material
+from app.services.channel_secret_store import (
+    clear_local_connector_secrets,
+    connector_secret_status,
+    resolve_webhook_secret_material,
+    save_local_connector_secrets,
+)
 from app.services.channel_webhook_verifier import verify_channel_webhook_request
 from app.services.wecom_callback_crypto import (
     WecomCallbackCryptoError,
@@ -43,6 +49,7 @@ from app.services.wecom_callback_crypto import (
 )
 from app.services.delivery_failures import attach_delivery_normalization_and_review
 from app.services.trusted_inbound_messages import TrustedInboundResult, create_trusted_inbound_message_if_ready
+from app.services.ai_reply_cycle import process_inbound_message_for_ai
 
 
 READY_TO_SEND = "ready_to_send"
@@ -61,6 +68,15 @@ SENSITIVE_WEBHOOK_PAYLOAD_KEYS = (
     "app_secret",
     "encrypt",
 )
+
+
+def _public_secret_status(status_value: str) -> str:
+    normalized = (status_value or "").strip().lower()
+    if normalized in {"configured", "fixture_configured", "env_configured", "local_configured"}:
+        return "configured"
+    if normalized in {"invalid", "provider_mismatch"}:
+        return "invalid"
+    return "missing"
 
 
 def _resolve_website_widget_tenant(
@@ -219,6 +235,133 @@ def get_channel_connector(
     if connector is None:
         raise HTTPException(status_code=404, detail="channel connector not found")
     return connector
+
+
+def upsert_channel_connector_secrets(
+    db: Session,
+    *,
+    channel_id: int,
+    payload: ChannelConnectorSecretUpsert,
+    principal: CurrentPrincipal,
+) -> dict:
+    channel = _require_channel_for_principal(db, channel_id, principal)
+    connector = _get_channel_connector(db, channel)
+    if connector is None:
+        raise HTTPException(status_code=404, detail="channel connector not found")
+    credential_ref = f"local:channel_connector:{connector.id}"
+    field_status = save_local_connector_secrets(credential_ref=credential_ref, secrets=payload.secrets)
+    public_config = dict(connector.public_config or {})
+    public_config["credential_ref"] = credential_ref
+    public_config["secret_field_status"] = field_status
+    connector.public_config = public_config
+    connector.secret_status = _public_secret_status(
+        connector_secret_status(provider=connector.provider, public_config=connector.public_config)
+    )
+    connector.updated_by_id = principal.user.id
+    connector.updated_at = utc_now()
+    add_audit_event(
+        db,
+        tenant_id=connector.tenant_id,
+        actor_id=principal.user.id,
+        action="channel_connector.secrets_upserted",
+        resource_type="channel_connector",
+        resource_id=str(connector.id),
+        payload={"channel_id": channel.id, "provider": connector.provider, "fields": sorted(field_status), "secret_included": False},
+    )
+    db.commit()
+    return {
+        "tenant_id": connector.tenant_id,
+        "channel_id": channel.id,
+        "connector_id": connector.id,
+        "provider": connector.provider,
+        "status": connector.secret_status,
+        "field_status": field_status,
+        "secret_included": False,
+    }
+
+
+def delete_channel_connector_secrets(
+    db: Session,
+    *,
+    channel_id: int,
+    principal: CurrentPrincipal,
+) -> dict:
+    channel = _require_channel_for_principal(db, channel_id, principal)
+    connector = _get_channel_connector(db, channel)
+    if connector is None:
+        raise HTTPException(status_code=404, detail="channel connector not found")
+    credential_ref = str((connector.public_config or {}).get("credential_ref") or "")
+    if credential_ref.startswith("local:"):
+        clear_local_connector_secrets(credential_ref=credential_ref)
+    public_config = dict(connector.public_config or {})
+    public_config.pop("credential_ref", None)
+    public_config.pop("secret_field_status", None)
+    connector.public_config = public_config
+    connector.secret_status = "missing"
+    connector.updated_by_id = principal.user.id
+    connector.updated_at = utc_now()
+    add_audit_event(
+        db,
+        tenant_id=connector.tenant_id,
+        actor_id=principal.user.id,
+        action="channel_connector.secrets_deleted",
+        resource_type="channel_connector",
+        resource_id=str(connector.id),
+        payload={"channel_id": channel.id, "provider": connector.provider, "secret_included": False},
+    )
+    db.commit()
+    return {
+        "tenant_id": connector.tenant_id,
+        "channel_id": channel.id,
+        "connector_id": connector.id,
+        "provider": connector.provider,
+        "status": "missing",
+        "field_status": {},
+        "secret_included": False,
+    }
+
+
+def verify_channel_connector_configuration(
+    db: Session,
+    *,
+    channel_id: int,
+    principal: CurrentPrincipal,
+) -> dict:
+    channel = _require_channel_for_principal(db, channel_id, principal)
+    connector = _get_channel_connector(db, channel)
+    if connector is None:
+        raise HTTPException(status_code=404, detail="channel connector not found")
+    contract = get_channel_provider_contract(connector.provider) or {}
+    required = list((contract.get("verification_contract") or {}).get("required_secret_fields") or [])
+    field_status = dict((connector.public_config or {}).get("secret_field_status") or {})
+    missing = [field for field in required if field.replace("_optional", "") not in field_status and not field.endswith("_optional")]
+    secret_resolution = resolve_webhook_secret_material(provider=connector.provider, public_config=connector.public_config)
+    status_value = "verified" if not missing and secret_resolution.material is not None else "missing_configuration"
+    connector.status = "ready" if status_value == "verified" else "draft"
+    connector.secret_status = _public_secret_status(secret_resolution.status)
+    connector.updated_by_id = principal.user.id
+    connector.updated_at = utc_now()
+    add_audit_event(
+        db,
+        tenant_id=connector.tenant_id,
+        actor_id=principal.user.id,
+        action="channel_connector.configuration_verified",
+        resource_type="channel_connector",
+        resource_id=str(connector.id),
+        payload={"channel_id": channel.id, "provider": connector.provider, "status": status_value, "missing_fields": missing, "secret_included": False},
+    )
+    db.commit()
+    return {
+        "tenant_id": connector.tenant_id,
+        "channel_id": channel.id,
+        "connector_id": connector.id,
+        "provider": connector.provider,
+        "status": status_value,
+        "missing_fields": missing,
+        "webhook_path": connector.webhook_path,
+        "external_write_enabled": False,
+        "secret_included": False,
+    }
 
 
 def list_channel_accounts(
@@ -909,6 +1052,9 @@ def receive_website_widget_message(
         conversation = db.get(Conversation, trusted_inbound.conversation_id)
         if conversation is not None:
             conversation.last_message_at = greeting.created_at
+    ai_cycle_result = None
+    if trusted_inbound.trusted_message_id is not None:
+        ai_cycle_result = process_inbound_message_for_ai(db, message_id=trusted_inbound.trusted_message_id)
     add_audit_event(
         db,
         tenant_id=tenant.id,
@@ -923,6 +1069,7 @@ def receive_website_widget_message(
             "conversation_id": trusted_inbound.conversation_id,
             "reopen_action": reopen_action,
             "greeting_message_id": greeting_message_id,
+            "ai_cycle_result": ai_cycle_result,
             "external_write": False,
         },
     )

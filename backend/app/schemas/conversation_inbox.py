@@ -62,3 +62,9 @@ class ConversationWorkflowAction(BaseModel):
     target_user_id: Optional[int] = None
     target_team_id: Optional[int] = None
     note: str = Field(default="", max_length=1000)
+
+
+class AgentReplyCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=12000)
+    close_conversation: bool = False
+    idempotency_key: str = Field(default="", max_length=180)

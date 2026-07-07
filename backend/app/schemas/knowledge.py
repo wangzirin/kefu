@@ -168,6 +168,105 @@ class ObjectKnowledgeCardList(BaseModel):
     total: int
 
 
+class KnowledgeImportTemplateRow(BaseModel):
+    business_object: str = Field(default="", max_length=180)
+    question: str = Field(default="", max_length=4000)
+    answer: str = Field(default="", max_length=12000)
+    trigger_keywords: list[str] | str = Field(default_factory=list)
+    channel_scope: str = Field(default="all", max_length=80)
+    risk_level: str = Field(default="normal", pattern="^(normal|review|blocked|low|medium|high|critical)$")
+    forbidden_commitments: list[str] | str = Field(default_factory=list)
+    handoff_rule: str = Field(default="", max_length=2000)
+    source_note: str = Field(default="", max_length=1000)
+    status: str = Field(default="draft", pattern="^(draft|active|archived)$")
+
+
+class KnowledgeImportPrecheckCreate(BaseModel):
+    source_file_ref: str = Field(default="frontend_template_upload", max_length=500)
+    rows: list[KnowledgeImportTemplateRow] = Field(default_factory=list, max_length=2000)
+
+
+class KnowledgeImportPrecheckRead(BaseModel):
+    tenant_id: int
+    status: str
+    can_import: bool
+    row_count: int
+    valid_count: int
+    error_count: int
+    warning_count: int
+    valid_rows: list[dict[str, Any]]
+    errors: list[dict[str, Any]]
+    warnings: list[dict[str, Any]]
+    required_fields: list[str]
+    provider_call_performed: bool
+    external_write_performed: bool
+
+
+class KnowledgeImportCreate(KnowledgeImportPrecheckCreate):
+    pass
+
+
+class KnowledgeImportRead(BaseModel):
+    id: int
+    tenant_id: int
+    source_file_ref: str
+    object_type: str
+    row_count: int
+    valid_count: int
+    error_count: int
+    status: str
+    result_payload: dict[str, Any]
+    created_by_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class KnowledgeImportSampleRunRead(BaseModel):
+    tenant_id: int
+    import_batch_id: int
+    status: str
+    total_cases: int
+    hit_cases: int
+    low_confidence_cases: int
+    blocked_cases: int
+    can_publish: bool
+    case_results: list[dict[str, Any]]
+    provider_call_performed: bool
+    external_write_performed: bool
+
+
+class KnowledgePublicationCreate(BaseModel):
+    import_batch_id: int = Field(ge=1)
+    note: str = Field(default="负责人确认发布客服资料。", max_length=1000)
+
+
+class KnowledgePublicationRead(BaseModel):
+    tenant_id: int
+    import_batch_id: int
+    status: str
+    version: int
+    created_business_object_ids: list[int]
+    created_object_knowledge_card_ids: list[int]
+    archived_object_knowledge_card_ids: list[int]
+    message: str
+    audit: dict[str, Any]
+
+
+class KnowledgePublicationRollbackCreate(BaseModel):
+    reason: str = Field(default="负责人确认回滚本次知识资料发布。", max_length=1000)
+
+
+class KnowledgePublicationRollbackRead(BaseModel):
+    tenant_id: int
+    import_batch_id: int
+    status: str
+    archived_business_object_ids: list[int]
+    archived_object_knowledge_card_ids: list[int]
+    reason: str
+    external_write_performed: bool
+
+
 class KnowledgeDocumentCreate(BaseModel):
     title: str = Field(min_length=1, max_length=180)
     source_type: str = Field(default="manual_document", max_length=40)

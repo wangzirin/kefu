@@ -25,6 +25,38 @@ def normalize_provider(provider: str) -> str:
 
 
 _PROVIDER_CONTRACTS = {
+    "wechat_kf": ChannelProviderContract(
+        provider="wechat_kf",
+        display_name="微信客服",
+        supported_channel_types=["wechat_kf", "wechat_customer_service"],
+        default_signature_mode="wechat_kf_token_aeskey",
+        webhook_path_template="/api/webhooks/wechat-kf/channels/{channel_id}",
+        inbound_event_types=["verification_echo", "message", "customer_event"],
+        capabilities={
+            "receive_webhook": True,
+            "external_write_enabled": False,
+            "requires_official_authorization": True,
+            "supports_encrypted_payload": True,
+            "supports_delivery_receipt": True,
+            "required_public_fields": ["open_kfid", "corp_id"],
+            "required_secret_fields": ["token", "encoding_aes_key", "app_secret"],
+        },
+        verification_contract={
+            "production_status": "self_service_configuration_skeleton",
+            "requires_secret_store": True,
+            "required_query_keys": ["msg_signature", "timestamp", "nonce"],
+            "required_secret_fields": ["token", "encoding_aes_key", "app_secret"],
+            "validated_in_current_stage": False,
+            "fixture_validation_in_current_stage": True,
+            "notes": "客户在微信客服后台取得配置后填入系统；默认只开放入站和草稿，真实外发需后续白名单验收。",
+        },
+        inbound_event_contract={
+            "raw_payload_retained": True,
+            "signature_values_stored": False,
+            "parsed_event_status": "configuration_skeleton",
+            "trusted_message_creation": False,
+        },
+    ),
     "wecom": ChannelProviderContract(
         provider="wecom",
         display_name="企业微信客服",
@@ -115,10 +147,49 @@ _PROVIDER_CONTRACTS = {
             "trusted_message_creation": True,
         },
     ),
+    "wechat_miniapp": ChannelProviderContract(
+        provider="wechat_miniapp",
+        display_name="微信小程序",
+        supported_channel_types=["wechat_miniapp", "miniapp"],
+        default_signature_mode="wechat_token",
+        webhook_path_template="/api/webhooks/wechat-miniapp/channels/{channel_id}",
+        inbound_event_types=["verification_echo", "message", "customer_event"],
+        capabilities={
+            "receive_webhook": True,
+            "external_write_enabled": False,
+            "requires_official_authorization": True,
+            "supports_encrypted_payload": True,
+            "supports_delivery_receipt": False,
+            "required_public_fields": ["app_id"],
+            "required_secret_fields": ["token", "encoding_aes_key", "app_secret"],
+        },
+        verification_contract={
+            "production_status": "self_service_configuration_skeleton",
+            "requires_secret_store": True,
+            "required_query_keys": ["signature", "timestamp", "nonce"],
+            "required_secret_fields": ["token", "encoding_aes_key", "app_secret"],
+            "validated_in_current_stage": False,
+            "fixture_validation_in_current_stage": True,
+            "notes": "小程序作为咨询入口配置；主动发送能力按微信平台限制后续单独验收。",
+        },
+        inbound_event_contract={
+            "raw_payload_retained": True,
+            "signature_values_stored": False,
+            "parsed_event_status": "configuration_skeleton",
+            "trusted_message_creation": False,
+        },
+    ),
 }
 
 _PROVIDER_ALIASES = {
     "wechat_official_account": "wechat_official_account",
+    "wechat_kf": "wechat_kf",
+    "wechat-kf": "wechat_kf",
+    "wechat_customer_service": "wechat_kf",
+    "weixin_kf": "wechat_kf",
+    "wechat-miniapp": "wechat_miniapp",
+    "wechat_miniapp": "wechat_miniapp",
+    "miniapp": "wechat_miniapp",
     "wechat_mp": "wechat_official_account",
     "mp_weixin": "wechat_official_account",
     "weixin_mp": "wechat_official_account",

@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models import Channel, Contact, Conversation, ConversationEvent, Message
 from app.models.foundation import utc_now
 from app.schemas.conversation_inbox import (
+    AgentReplyCreate,
     ConversationAssignmentUpdate,
     ConversationInboxList,
     ConversationWorkflowAction,
@@ -22,9 +23,11 @@ from app.schemas.foundation import (
 )
 from app.services.conversation_inbox import (
     apply_conversation_workflow_action,
+    create_agent_reply,
     list_conversation_inbox,
     update_conversation_assignment,
 )
+from app.services.ai_reply_cycle import process_inbound_message_for_ai
 
 router = APIRouter(prefix="/api", tags=["conversations"])
 
@@ -194,3 +197,34 @@ def create_message(
     db.commit()
     db.refresh(message)
     return message
+
+
+@router.post(
+    "/conversations/{conversation_id}/inbound-message-cycle",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_conversation_inbound_message_cycle(
+    conversation_id: int,
+    payload: MessageCreate,
+    principal: CurrentPrincipal = Depends(require_permission(CONVERSATION_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> dict:
+    if payload.direction != "inbound":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="direction must be inbound")
+    message = create_message(conversation_id, payload, principal, db)
+    result = process_inbound_message_for_ai(db, message_id=message.id, actor_id=principal.user.id)
+    return {"message": MessageRead.model_validate(message, from_attributes=True), "ai_cycle": result}
+
+
+@router.post(
+    "/conversations/{conversation_id}/agent-replies",
+    response_model=MessageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_conversation_agent_reply(
+    conversation_id: int,
+    payload: AgentReplyCreate,
+    principal: CurrentPrincipal = Depends(require_permission(CONVERSATION_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> Message:
+    return create_agent_reply(db, conversation_id, payload, principal)

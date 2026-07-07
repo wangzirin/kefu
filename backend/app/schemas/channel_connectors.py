@@ -1,4 +1,5 @@
 from datetime import datetime
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -37,6 +38,32 @@ class ChannelConnectorConfigRead(BaseModel):
     updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ChannelConnectorSecretUpsert(BaseModel):
+    secrets: dict[str, str] = Field(default_factory=dict, max_length=20)
+
+
+class ChannelConnectorSecretStatusRead(BaseModel):
+    tenant_id: int
+    channel_id: int
+    connector_id: int
+    provider: str
+    status: str
+    field_status: dict[str, str]
+    secret_included: bool = False
+
+
+class ChannelConnectorVerificationRead(BaseModel):
+    tenant_id: int
+    channel_id: int
+    connector_id: int
+    provider: str
+    status: str
+    missing_fields: list[str]
+    webhook_path: str
+    external_write_enabled: bool
+    secret_included: bool = False
 
 
 class ChannelAccountCreate(BaseModel):

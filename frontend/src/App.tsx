@@ -36,6 +36,7 @@ import {
   applyConversationWorkflowAction,
   assignUserRole,
   batchLabelKnowledgeEvaluationRunCaseFactuality,
+  configureChannelConnector,
   configureChannelAccount,
   confirmOutboxDraft,
   createLocalBackup,
@@ -51,8 +52,10 @@ import {
   createLocalBackupRestoreDryRun,
   createBusinessObject,
   createKnowledgeDocument,
+  createKnowledgeImport,
   createKnowledgeGapDocumentDraft,
   createKnowledgeGapRegressionCase,
+  createAgentReply,
   createConversationMessage,
   createObjectKnowledgeCard,
   createOutboxDeliveryJob,
@@ -80,6 +83,7 @@ import {
   getOpsMetricsDashboard,
   getWorkerHealthDashboard,
   getKnowledgeEvaluationRun,
+  getAiServiceStatus,
   getKnowledgeMemoryMeshOverview,
   getCustomerQualityReport,
   getMonthlyQualityReview,
@@ -133,13 +137,16 @@ import {
   loginLocalDev,
   preflightSignedUpdatePackage,
   publishKnowledgeDocument,
+  publishKnowledgeImport,
   previewKnowledgeUpdatePackage,
+  precheckKnowledgeImport,
   precheckCustomerServiceQuestionBank,
   resolveDeliveryFailureReview,
   resolveHumanReviewTask,
   runOutboxDeliveryQueue,
   runOutboxWorker,
   runKnowledgeEvaluationSet,
+  runKnowledgeImportSample,
   runTrustedInboundWorker,
   rollbackKnowledgeDocumentPublication,
   rollbackStagedSignedUpdatePackage,
@@ -156,6 +163,9 @@ import {
   updateDiagnosticIntakeRecord,
   updateDiagnosticRemediationRequest,
   updateTenantReplyStrategy,
+  upsertChannelConnectorSecrets,
+  deleteChannelConnectorSecrets,
+  verifyChannelConnector,
   updateUserStatus,
   verifyLocalBackup,
   type AccountRole,
@@ -163,9 +173,13 @@ import {
   type BusinessOpsDashboard,
   type BusinessObject,
   type BusinessObjectType,
+  type AiServiceStatus,
   type Channel,
   type ChannelAccount,
   type ChannelAccountPayload,
+  type ChannelConnectorConfig,
+  type ChannelConnectorSecretStatus,
+  type ChannelConnectorVerification,
   type ContactProfile,
   type ContactProfileDetail,
   type ContactProfileList,
@@ -204,6 +218,11 @@ import {
   type KnowledgeGapList,
   type KnowledgeGapRegressionCaseResult,
   type KnowledgeGapSyncResult,
+  type KnowledgeImportBatch,
+  type KnowledgeImportPrecheck,
+  type KnowledgeImportSampleRun,
+  type KnowledgeImportTemplateRow,
+  type KnowledgePublication,
   type KnowledgeMemoryMeshOverview,
   type LocalOwnerSetupRequest,
   type LocalBackupRecord,
@@ -775,6 +794,31 @@ interface KnowledgeUpdatePackageDraft {
   message: string;
 }
 
+interface KnowledgeTemplateImportDraft {
+  sourceFileRef: string;
+  text: string;
+  status: "idle" | "loading" | "ready" | "error";
+  message: string;
+  precheck: KnowledgeImportPrecheck | null;
+  importBatch: KnowledgeImportBatch | null;
+  sampleRun: KnowledgeImportSampleRun | null;
+  publication: KnowledgePublication | null;
+}
+
+interface AiServiceStatusState {
+  status: "idle" | "loading" | "ready" | "error";
+  message: string;
+  data: AiServiceStatus | null;
+}
+
+interface ChannelConnectorSelfServiceState {
+  status: "idle" | "loading" | "ready" | "error";
+  message: string;
+  config: ChannelConnectorConfig | null;
+  secretStatus: ChannelConnectorSecretStatus | null;
+  verification: ChannelConnectorVerification | null;
+}
+
 interface KnowledgeEvaluationState {
   status: "idle" | "loading" | "ready" | "error";
   message: string;
@@ -1027,6 +1071,12 @@ const DEFAULT_CUSTOMER_KNOWLEDGE_INTAKE_CSV = [
   "标准问答,package,AI客服入门验证包,\"入门版;官网客服试点\",入门验证包适合什么客户？,适合先验证官网客服、核心问题、留资和转人工流程的小微企业。复杂多渠道自动外发需要后续授权。,,,,,入门验证包适合什么客户？,\"官网客服;转人工\",,客户确认模板",
   "流程政策,,, ,,,售后退换政策,客户咨询七天退换时，应先确认订单状态、商品状态和平台规则。不能承诺无条件退款。,无条件退款,\"投诉;起诉;赔偿\",超过七天还能退货吗？,\"订单状态;商品状态;平台规则\",无条件退款,售后政策手册",
   "风险规则,,,,,,,,\"私下转账;绕过平台;保证收益\",\"投诉;举报;差评\",客户要求私下转账可以吗？,\"转人工;平台规则\",私下转账,风险规则表"
+].join("\n");
+
+const DEFAULT_KNOWLEDGE_TEMPLATE_IMPORT_TEXT = [
+  "business_object,question,answer,trigger_keywords,channel_scope,risk_level,forbidden_commitments,handoff_rule,source_note,status",
+  "餐饮门店 AI 客服接入,餐饮门店怎么接入 AI 客服,餐饮门店可以先接入网站客服组件，再导入门店常见问题，负责人发布后启用 AI 接待,\"餐饮门店;AI客服;接入;网站客服\",website,normal,,,本地测试资料,active",
+  "售后退款规则,我要投诉并要求退款赔偿,投诉、退款、赔偿类问题需要人工客服核实订单、责任边界和平台规则后处理,\"投诉;退款;赔偿\",website,blocked,\"无条件退款;保证赔偿\",命中投诉退款赔偿必须转人工,风险规则测试,active"
 ].join("\n");
 
 function buildDefaultCustomerQuestionBankText() {
@@ -1372,6 +1422,28 @@ export function App() {
     result: null,
     status: "idle",
     message: "等待导入知识资料包"
+  });
+  const [knowledgeTemplateImportDraft, setKnowledgeTemplateImportDraft] = useState<KnowledgeTemplateImportDraft>({
+    sourceFileRef: "frontend://knowledge-template-v1",
+    text: DEFAULT_KNOWLEDGE_TEMPLATE_IMPORT_TEXT,
+    status: "idle",
+    message: "等待表格资料预检",
+    precheck: null,
+    importBatch: null,
+    sampleRun: null,
+    publication: null
+  });
+  const [aiServiceStatus, setAiServiceStatus] = useState<AiServiceStatusState>({
+    status: "idle",
+    message: "等待正式登录",
+    data: null
+  });
+  const [channelConnectorSelfService, setChannelConnectorSelfService] = useState<ChannelConnectorSelfServiceState>({
+    status: "idle",
+    message: "等待选择渠道并配置连接器",
+    config: null,
+    secretStatus: null,
+    verification: null
   });
   const [tenantReplyStrategy, setTenantReplyStrategy] = useState<TenantReplyStrategyState>({
     status: "idle",
@@ -1958,12 +2030,7 @@ export function App() {
       message: item.channel_type === "website" ? "正在发送到网站访客" : "正在写入本地会话记录"
     });
     try {
-      await createConversationMessage(item.id, auth.token, {
-        direction: "outbound",
-        sender_type: "agent",
-        content: trimmed,
-        external_message_id: ""
-      });
+      await createAgentReply(item.id, auth.token, { content: trimmed });
       await refreshConversationDetail(item.id, auth.token);
       await refreshConversationInbox(auth.user.tenant.id, auth.token, conversationInboxView, conversationInboxFilters);
       setLocalReplyState({
@@ -2341,6 +2408,29 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "无法读取模型观测与安全状态";
       setLlmOpsReadiness({
+        status: "error",
+        message,
+        data: null
+      });
+    }
+  }
+
+  async function refreshAiServiceStatus(tenantId: string, token: string) {
+    setAiServiceStatus((current) => ({
+      ...current,
+      status: "loading",
+      message: ""
+    }));
+    try {
+      const data = await getAiServiceStatus(tenantId, token);
+      setAiServiceStatus({
+        status: "ready",
+        message: data.customer_visible_detail || data.label,
+        data
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法读取 AI 服务状态";
+      setAiServiceStatus({
         status: "error",
         message,
         data: null
@@ -3004,6 +3094,7 @@ export function App() {
       void refreshConversationInbox(tenantId, token);
       void refreshReviewInbox(tenantId, token);
       void refreshReplyDecisions(tenantId, token);
+      void refreshAiServiceStatus(tenantId, token);
     }
     if (canReadTickets(user)) {
       void refreshSupportTickets(tenantId, token);
@@ -4141,6 +4232,153 @@ export function App() {
     }
   }
 
+  function getKnowledgeTemplateRowsOrSetError(): KnowledgeImportTemplateRow[] {
+    const rows = parseKnowledgeTemplateImportRows(knowledgeTemplateImportDraft.text);
+    if (rows.length === 0) {
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        status: "error",
+        message: "表格资料为空，请保留表头并至少填写一行。"
+      }));
+    }
+    return rows;
+  }
+
+  async function handlePrecheckKnowledgeTemplateImport() {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    const rows = getKnowledgeTemplateRowsOrSetError();
+    if (rows.length === 0) return;
+    setKnowledgeTemplateImportDraft((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在预检表格资料"
+    }));
+    try {
+      const result = await precheckKnowledgeImport(auth.user.tenant.id, auth.token, {
+        source_file_ref: knowledgeTemplateImportDraft.sourceFileRef,
+        rows
+      });
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        precheck: result,
+        status: result.can_import ? "ready" : "error",
+        message: result.can_import
+          ? `预检通过：${result.valid_count}/${result.row_count} 行可导入，警告 ${result.warning_count} 条。`
+          : `预检阻断：错误 ${result.error_count} 条，请修正后再导入。`
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "表格资料预检失败";
+      setKnowledgeTemplateImportDraft((current) => ({ ...current, status: "error", message }));
+    }
+  }
+
+  async function handleCreateKnowledgeTemplateImport() {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    const rows = getKnowledgeTemplateRowsOrSetError();
+    if (rows.length === 0) return;
+    setKnowledgeTemplateImportDraft((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在导入为草稿批次"
+    }));
+    try {
+      const result = await createKnowledgeImport(auth.user.tenant.id, auth.token, {
+        source_file_ref: knowledgeTemplateImportDraft.sourceFileRef,
+        rows
+      });
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        importBatch: result,
+        sampleRun: null,
+        publication: null,
+        status: result.status === "draft" ? "ready" : "error",
+        message: result.status === "draft"
+          ? `已导入草稿批次 #${result.id}，请继续样题试跑。`
+          : `导入批次 #${result.id} 状态为 ${result.status}，请先修正预检错误。`
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "表格资料导入失败";
+      setKnowledgeTemplateImportDraft((current) => ({ ...current, status: "error", message }));
+    }
+  }
+
+  async function handleRunKnowledgeTemplateSample() {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    const importId = knowledgeTemplateImportDraft.importBatch?.id;
+    if (!importId) {
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        status: "error",
+        message: "请先导入草稿批次，再进行样题试跑。"
+      }));
+      return;
+    }
+    setKnowledgeTemplateImportDraft((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在样题试跑"
+    }));
+    try {
+      const result = await runKnowledgeImportSample(auth.user.tenant.id, importId, auth.token);
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        sampleRun: result,
+        status: result.can_publish ? "ready" : "error",
+        message: result.can_publish
+          ? `试跑通过：命中 ${result.hit_cases}，低置信 ${result.low_confidence_cases}，风险阻断 ${result.blocked_cases}。`
+          : "试跑未通过，请修正资料后重新导入。"
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "样题试跑失败";
+      setKnowledgeTemplateImportDraft((current) => ({ ...current, status: "error", message }));
+    }
+  }
+
+  async function handlePublishKnowledgeTemplateImport() {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    const importId = knowledgeTemplateImportDraft.importBatch?.id;
+    if (!importId) {
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        status: "error",
+        message: "请先导入草稿批次，再发布资料。"
+      }));
+      return;
+    }
+    setKnowledgeTemplateImportDraft((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在发布资料版本"
+    }));
+    try {
+      const result = await publishKnowledgeImport(auth.user.tenant.id, auth.token, {
+        import_batch_id: importId,
+        note: "前端资料中心发布"
+      });
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        publication: result,
+        status: "ready",
+        message: result.message
+      }));
+      await Promise.all([
+        refreshKnowledgeDocuments(auth.user.tenant.id, auth.token, true),
+        refreshKnowledgeMemoryMeshOverview(auth.user.tenant.id, auth.token)
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "资料发布失败";
+      setKnowledgeTemplateImportDraft((current) => ({ ...current, status: "error", message }));
+    }
+  }
+
   async function handleSaveTenantReplyStrategy() {
     if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
       return;
@@ -5088,6 +5326,123 @@ export function App() {
     return account;
   }
 
+  async function handleConfigureChannelConnector(channelId: number, provider: string) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
+      throw new Error("当前账号无权配置渠道连接器");
+    }
+    setChannelConnectorSelfService((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在保存连接器配置"
+    }));
+    try {
+      const normalizedProvider = provider || "website";
+      const providerLabels: Record<string, string> = {
+        website: "网站",
+        wechat_kf: "微信客服",
+        wecom: "企业微信",
+        wechat_official_account: "微信公众号",
+        wechat_official: "微信公众号",
+        wechat_miniapp: "微信小程序"
+      };
+      const config = await configureChannelConnector(channelId, auth.token, {
+        provider: normalizedProvider,
+        mode: "noop",
+        status: "draft",
+        display_name: providerLabels[normalizedProvider] ?? normalizedProvider,
+        capabilities: ["receive_inbound", "draft_reply"],
+        public_config: {
+          self_service_configured: true,
+          external_write: "disabled",
+          configured_from: "channel_console"
+        },
+        webhook_path: `/api/webhooks/${normalizedProvider.replace(/_/g, "-")}/channels/${channelId}`,
+        signature_mode: normalizedProvider === "website" ? "website_token" : "wechat_token_aeskey"
+      });
+      setChannelConnectorSelfService((current) => ({
+        ...current,
+        config,
+        status: "ready",
+        message: "连接器配置已保存，真实外发仍关闭。"
+      }));
+      return config;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存连接器配置失败";
+      setChannelConnectorSelfService((current) => ({ ...current, status: "error", message }));
+      throw error;
+    }
+  }
+
+  async function handleUpsertChannelConnectorSecrets(channelId: number, secrets: Record<string, string>) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
+      throw new Error("当前账号无权配置渠道密钥");
+    }
+    setChannelConnectorSelfService((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在保存密钥状态"
+    }));
+    try {
+      const secretStatus = await upsertChannelConnectorSecrets(channelId, auth.token, { secrets });
+      setChannelConnectorSelfService((current) => ({
+        ...current,
+        secretStatus,
+        status: "ready",
+        message: "密钥已保存，前端不会回显明文。"
+      }));
+      return secretStatus;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存渠道密钥失败";
+      setChannelConnectorSelfService((current) => ({ ...current, status: "error", message }));
+      throw error;
+    }
+  }
+
+  async function handleDeleteChannelConnectorSecrets(channelId: number) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
+      throw new Error("当前账号无权清空渠道密钥");
+    }
+    setChannelConnectorSelfService((current) => ({ ...current, status: "loading", message: "正在清空密钥" }));
+    try {
+      const secretStatus = await deleteChannelConnectorSecrets(channelId, auth.token);
+      setChannelConnectorSelfService((current) => ({
+        ...current,
+        secretStatus,
+        verification: null,
+        status: "ready",
+        message: "密钥已清空。"
+      }));
+      return secretStatus;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "清空渠道密钥失败";
+      setChannelConnectorSelfService((current) => ({ ...current, status: "error", message }));
+      throw error;
+    }
+  }
+
+  async function handleVerifyChannelConnector(channelId: number) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
+      throw new Error("当前账号无权验证渠道配置");
+    }
+    setChannelConnectorSelfService((current) => ({ ...current, status: "loading", message: "正在验证渠道配置" }));
+    try {
+      const verification = await verifyChannelConnector(channelId, auth.token);
+      setChannelConnectorSelfService((current) => ({
+        ...current,
+        verification,
+        status: verification.status === "verified" ? "ready" : "error",
+        message: verification.status === "verified"
+          ? "配置完整，默认仍不真实外发。"
+          : `配置未完成：${verification.missing_fields.join("、") || verification.status}`
+      }));
+      return verification;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "验证渠道配置失败";
+      setChannelConnectorSelfService((current) => ({ ...current, status: "error", message }));
+      throw error;
+    }
+  }
+
   async function handleCreateAccountUser(payload: {
     name: string;
     email: string;
@@ -5861,7 +6216,7 @@ export function App() {
     try {
       await resolveDeliveryFailureReview(item.id, auth.token, {
         status: "resolved",
-        resolution_note: `已处理：${item.next_action}`
+        resolution_note: `已跟进：${item.next_action}`
       });
       await refreshFailureReviews(auth.user.tenant.id, auth.token);
     } catch (error) {
@@ -6047,6 +6402,7 @@ export function App() {
     handleCaptureEvaluationRunCaseFinalAnswerSample,
     handleCheckKnowledgeDocumentPublishGate,
     handleConfigureChannelAccount,
+    handleConfigureChannelConnector,
     handleConfirmDraft,
     handleConnectorPlan,
     handleContactProfileListViewChange,
@@ -6084,6 +6440,10 @@ export function App() {
     handleImportKnowledgeDocument,
     handleImportKnowledgeUpdatePackage,
     handleImportFinalAnswerLabels,
+    handlePrecheckKnowledgeTemplateImport,
+    handleCreateKnowledgeTemplateImport,
+    handleRunKnowledgeTemplateSample,
+    handlePublishKnowledgeTemplateImport,
     handleLabelEvaluationRunCaseFactuality,
     handleLoadCustomerMaterialTemplatePackage,
     handleLoadKnowledgeEvaluationRun,
@@ -6112,6 +6472,9 @@ export function App() {
     handleSelectContactProfile,
     handleSendLocalConversationReply,
     handleStageSignedUpdatePackage,
+    handleUpsertChannelConnectorSecrets,
+    handleDeleteChannelConnectorSecrets,
+    handleVerifyChannelConnector,
     handleSupportTicketFiltersChange,
     handleSupportTicketListViewChange,
     handleSyncKnowledgeGaps,
@@ -6126,6 +6489,7 @@ export function App() {
     knowledgeConfirmationImport,
     knowledgeDocumentListView,
     knowledgeDraft,
+    knowledgeTemplateImportDraft,
     knowledgeEvaluation,
     knowledgeGapListView,
     knowledgeGaps,
@@ -6138,6 +6502,8 @@ export function App() {
     lastWorkerRun,
     liveColleagueSummaries,
     llmOpsReadiness,
+    aiServiceStatus,
+    channelConnectorSelfService,
     localBackupState,
     localMaintenanceReadiness,
     localReplyState,
@@ -6202,6 +6568,7 @@ export function App() {
     setKnowledgeDocumentListView,
     setKnowledgeDraft,
     setKnowledgeSearchQuery,
+    setKnowledgeTemplateImportDraft,
     setKnowledgeUpdatePackageDraft,
     setObjectKnowledgeCardDraft,
     setOutboxListView,
@@ -6689,7 +7056,7 @@ export function App() {
                 </section>
               ) : dialogueScope === "recent" ? (
                 <section className="dialogue-section">
-                  <div className="dialogue-section-note">最近按最后一条消息时间排序，包含已处理和当前会话。</div>
+                  <div className="dialogue-section-note">最近按最后一条消息时间排序，包含已结束和当前会话。</div>
                   {liveRecentConversations.length > 0 ? liveRecentConversations.slice(0, 18).map((item) => (
                     <button
                       key={`recent-${item.id}`}
@@ -7461,7 +7828,7 @@ function getWorkspaceSectionFromHash(hash: string): WorkspaceSection {
 
 function getChannelEntryIdFromHash(hash: string) {
   const channel = getWorkspaceHashParams(hash).get("channel");
-  return ["website", "wechat_official", "wechat_miniapp", "wecom"].includes(channel ?? "")
+  return ["website", "wechat_kf", "wecom", "wechat_official", "wechat_miniapp"].includes(channel ?? "")
     ? channel ?? "website"
     : "website";
 }
@@ -10496,6 +10863,8 @@ function KnowledgeDocumentsPanel({
   customerQualityReport,
   customerQualityReportSignoffs,
   updatePackageDraft,
+  templateImportDraft,
+  aiServiceStatus,
   replyStrategyState,
   replyStrategyDraft,
   businessObjectDraft,
@@ -10507,6 +10876,7 @@ function KnowledgeDocumentsPanel({
   canImport,
   onBusinessObjectDraftChange,
   onUpdatePackageDraftChange,
+  onTemplateImportDraftChange,
   onReplyStrategyDraftChange,
   onObjectKnowledgeCardDraftChange,
   onDraftChange,
@@ -10515,6 +10885,10 @@ function KnowledgeDocumentsPanel({
   onCreateBusinessObject,
   onPreviewUpdatePackage,
   onImportUpdatePackage,
+  onPrecheckTemplateImport,
+  onCreateTemplateImport,
+  onRunTemplateSample,
+  onPublishTemplateImport,
   onSaveReplyStrategy,
   onCreateObjectKnowledgeCard,
   onImportDocument,
@@ -10529,6 +10903,8 @@ function KnowledgeDocumentsPanel({
   customerQualityReport: CustomerQualityReportState;
   customerQualityReportSignoffs: CustomerQualityReportSignoffState;
   updatePackageDraft: KnowledgeUpdatePackageDraft;
+  templateImportDraft: KnowledgeTemplateImportDraft;
+  aiServiceStatus: AiServiceStatusState;
   replyStrategyState: TenantReplyStrategyState;
   replyStrategyDraft: ReplyStrategyDraft;
   businessObjectDraft: BusinessObjectDraft;
@@ -10540,6 +10916,7 @@ function KnowledgeDocumentsPanel({
   canImport: boolean;
   onBusinessObjectDraftChange: (draft: BusinessObjectDraft) => void;
   onUpdatePackageDraftChange: (draft: KnowledgeUpdatePackageDraft) => void;
+  onTemplateImportDraftChange: (draft: KnowledgeTemplateImportDraft) => void;
   onReplyStrategyDraftChange: (draft: ReplyStrategyDraft) => void;
   onObjectKnowledgeCardDraftChange: (draft: ObjectKnowledgeCardDraft) => void;
   onDraftChange: (draft: KnowledgeDocumentDraft) => void;
@@ -10548,6 +10925,10 @@ function KnowledgeDocumentsPanel({
   onCreateBusinessObject: () => void;
   onPreviewUpdatePackage: () => void;
   onImportUpdatePackage: () => void;
+  onPrecheckTemplateImport: () => void;
+  onCreateTemplateImport: () => void;
+  onRunTemplateSample: () => void;
+  onPublishTemplateImport: () => void;
   onSaveReplyStrategy: () => void;
   onCreateObjectKnowledgeCard: () => void;
   onImportDocument: () => void;
@@ -10677,6 +11058,10 @@ function KnowledgeDocumentsPanel({
     () => buildCustomerKnowledgeUpdatePackageFromCsv(customerKnowledgeIntakeText),
     [customerKnowledgeIntakeText]
   );
+  const templateImportRows = useMemo(
+    () => parseKnowledgeTemplateImportRows(templateImportDraft.text),
+    [templateImportDraft.text]
+  );
   const customerKnowledgeIntakeCounts = {
     businessObjects: customerKnowledgeIntakePackage.business_objects.length,
     objectCards: customerKnowledgeIntakePackage.object_knowledge_cards.length,
@@ -10794,6 +11179,90 @@ function KnowledgeDocumentsPanel({
 
       <PanelStateNotice status={state.status} message={state.message} loadingMessage="正在读取知识文档、片段和发布记录。" />
 
+      <section className="customer-knowledge-intake-card" data-ai-workbench-template-import="true">
+        <div className="knowledge-section-title">
+          <Upload size={18} />
+          <strong>表格资料导入与发布</strong>
+        </div>
+        <div className="customer-intake-grid">
+          <article>
+            <span>AI 服务</span>
+            <strong>{aiServiceStatus.data?.label ?? (aiServiceStatus.status === "loading" ? "读取中" : "未读取")}</strong>
+            <small>{aiServiceStatus.data?.customer_visible_detail ?? aiServiceStatus.message}</small>
+          </article>
+          <article>
+            <span>表格行</span>
+            <strong>{templateImportRows.length} 行</strong>
+            <small>导入后先成为草稿批次，发布前不会进入 AI 自动回复。</small>
+          </article>
+          <article>
+            <span>预检结果</span>
+            <strong>{templateImportDraft.precheck ? `${templateImportDraft.precheck.valid_count}/${templateImportDraft.precheck.row_count}` : "待预检"}</strong>
+            <small>{templateImportDraft.precheck ? `错误 ${templateImportDraft.precheck.error_count} · 警告 ${templateImportDraft.precheck.warning_count}` : "检查必填、重复、风险等级和状态。"}</small>
+          </article>
+          <article>
+            <span>发布版本</span>
+            <strong>{templateImportDraft.publication ? `v${templateImportDraft.publication.version}` : "未发布"}</strong>
+            <small>{templateImportDraft.importBatch ? `草稿批次 #${templateImportDraft.importBatch.id}` : "发布后 AI 才引用 active 标准问答。"}</small>
+          </article>
+        </div>
+        <label className="field">
+          <span>表格内容</span>
+          <textarea
+            value={templateImportDraft.text}
+            onChange={(event) =>
+              onTemplateImportDraftChange({
+                ...templateImportDraft,
+                text: event.target.value,
+                status: "idle",
+                message: "表格已修改，请重新预检。",
+                precheck: null,
+                importBatch: null,
+                sampleRun: null,
+                publication: null
+              })
+            }
+            rows={7}
+            spellCheck={false}
+            disabled={!hasToken || templateImportDraft.status === "loading"}
+          />
+        </label>
+        <div className="knowledge-form-grid">
+          <label>
+            <span>来源标识</span>
+            <input
+              value={templateImportDraft.sourceFileRef}
+              onChange={(event) => onTemplateImportDraftChange({ ...templateImportDraft, sourceFileRef: event.target.value })}
+              disabled={!hasToken || templateImportDraft.status === "loading"}
+            />
+          </label>
+        </div>
+        <div className="customer-knowledge-release-actions">
+          <button type="button" className="secondary-action" onClick={onPrecheckTemplateImport} disabled={!hasToken || !canImport || templateImportDraft.status === "loading"}>
+            <Search size={16} />
+            预检表格
+          </button>
+          <button type="button" className="secondary-action" onClick={onCreateTemplateImport} disabled={!hasToken || !canImport || templateImportDraft.status === "loading"}>
+            <Upload size={16} />
+            导入草稿
+          </button>
+          <button type="button" className="secondary-action" onClick={onRunTemplateSample} disabled={!hasToken || !canImport || templateImportDraft.status === "loading" || !templateImportDraft.importBatch}>
+            <Search size={16} />
+            样题试跑
+          </button>
+          <button type="button" className="primary-action" onClick={onPublishTemplateImport} disabled={!hasToken || !canImport || templateImportDraft.status === "loading" || !templateImportDraft.importBatch}>
+            <CheckCircle2 size={16} />
+            发布给 AI
+          </button>
+        </div>
+        <PanelStateNotice status={templateImportDraft.status} message={templateImportDraft.message} loadingMessage="正在处理表格资料。" />
+        {templateImportDraft.sampleRun ? (
+          <div className="knowledge-result-note">
+            试跑：命中 {templateImportDraft.sampleRun.hit_cases} · 低置信 {templateImportDraft.sampleRun.low_confidence_cases} · 风险阻断 {templateImportDraft.sampleRun.blocked_cases}
+          </div>
+        ) : null}
+      </section>
+
       <section
         className="customer-knowledge-center"
         data-h2w2-knowledge-center="true"
@@ -10859,7 +11328,7 @@ function KnowledgeDocumentsPanel({
           <article data-h2w2-publish-boundary="no-external-write">
             <span>安全边界</span>
             <strong>{blockedPublicationCount} 条阻断</strong>
-            <small>知识发布只影响本地检索库，不会触发微信、抖音、淘宝等渠道发送。</small>
+            <small>知识发布只影响本地检索库，不会触发网站、微信客服、企业微信、公众号或小程序真实外发。</small>
           </article>
         </div>
       </section>
@@ -14463,7 +14932,7 @@ function AccountManagementPanel({
     const labels: Record<string, string> = {
       received: "已接收",
       in_review: "处理中",
-      resolved: "已处理",
+      resolved: "已结束",
       rejected: "已拒收"
     };
     return labels[status] ?? status;
@@ -14981,7 +15450,7 @@ function AccountManagementPanel({
                           处理中
                         </button>
                         <button type="button" className="ghost-action" onClick={() => void updateDiagnosticIntake(record, "resolved")}>
-                          标记已处理
+                          标记结束
                         </button>
                       </>
                     ) : null}
@@ -16537,7 +17006,7 @@ function FailureReviewPanel({
                 disabled={!hasToken || !canManageFailureReview || isLoading}
               >
                 <CheckCircle2 size={17} />
-                标记已处理
+                标记完成
               </button>
             </div>
           </article>
@@ -17107,6 +17576,60 @@ function splitFreeTextList(text: string): string[] {
       seen.add(item);
       return true;
     });
+}
+
+function splitTemplateImportLine(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === "\"" && quoted && next === "\"") {
+      current += "\"";
+      index += 1;
+      continue;
+    }
+    if (char === "\"") {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && (char === "," || char === "\t")) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseKnowledgeTemplateImportRows(text: string): KnowledgeImportTemplateRow[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length <= 1) {
+    return [];
+  }
+  const headers = splitTemplateImportLine(lines[0]).map((header) => header.trim());
+  return lines.slice(1).map((line) => {
+    const cells = splitTemplateImportLine(line);
+    const valueFor = (field: string) => cells[headers.indexOf(field)] ?? "";
+    return {
+      business_object: valueFor("business_object"),
+      question: valueFor("question"),
+      answer: valueFor("answer"),
+      trigger_keywords: splitFreeTextList(valueFor("trigger_keywords")),
+      channel_scope: valueFor("channel_scope") || "website",
+      risk_level: (valueFor("risk_level") || "normal") as KnowledgeImportTemplateRow["risk_level"],
+      forbidden_commitments: splitFreeTextList(valueFor("forbidden_commitments")),
+      handoff_rule: valueFor("handoff_rule"),
+      source_note: valueFor("source_note"),
+      status: (valueFor("status") || "active") as KnowledgeImportTemplateRow["status"]
+    };
+  });
 }
 
 function formatBusinessObjectType(value: BusinessObjectType | string) {
@@ -19460,7 +19983,7 @@ function createDemoWorkspace() {
 
 function formatDemoReplyDecisionNextAction(value: ReplyDecision["state"]) {
   const labels: Record<ReplyDecision["state"], string> = {
-    auto_reply_ready: "进入外发前置门禁",
+    auto_reply_ready: "AI 已生成可回复建议",
     manual_gate_required: "坐席审核草稿和证据",
     knowledge_gap: "补业务对象知识",
     blocked_by_policy: "策略复核",

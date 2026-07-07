@@ -113,6 +113,11 @@ from app.schemas.knowledge import (
     KnowledgeGapSyncCreate,
     KnowledgeGapSyncRead,
     KnowledgeGapUpdate,
+    KnowledgeImportCreate,
+    KnowledgeImportPrecheckCreate,
+    KnowledgeImportPrecheckRead,
+    KnowledgeImportRead,
+    KnowledgeImportSampleRunRead,
     KnowledgeMemoryMeshOverviewRead,
     KnowledgeMeshNodeRead,
     KnowledgeMeshProvenanceStepRead,
@@ -134,6 +139,10 @@ from app.schemas.knowledge import (
     KnowledgeUpdatePackageRollbackCreate,
     KnowledgeUpdatePackageRollbackRead,
     KnowledgeUpdatePackageOperationRead,
+    KnowledgePublicationCreate,
+    KnowledgePublicationRead,
+    KnowledgePublicationRollbackCreate,
+    KnowledgePublicationRollbackRead,
     KnowledgeVectorIndexPlanCreate,
     KnowledgeVectorIndexPlanRead,
     KnowledgeVectorIndexRebuildCreate,
@@ -335,6 +344,92 @@ def _clean_string_list(values: list[str]) -> list[str]:
         cleaned.append(item)
         seen.add(item)
     return cleaned
+
+
+def _template_list(value: list[str] | str) -> list[str]:
+    if isinstance(value, str):
+        return _clean_string_list(re.split(r"[,，;；|、\n]+", value))
+    return _clean_string_list([str(item) for item in value])
+
+
+def _normalize_import_risk(value: str) -> str:
+    clean = (value or "normal").strip().lower()
+    if clean in {"low", "normal"}:
+        return "normal"
+    if clean in {"medium", "review"}:
+        return "review"
+    if clean in {"high", "critical", "blocked"}:
+        return "blocked"
+    return clean
+
+
+def _knowledge_import_precheck_payload(
+    tenant_id: int,
+    payload: KnowledgeImportPrecheckCreate,
+) -> KnowledgeImportPrecheckRead:
+    required_fields = ["business_object", "question", "answer"]
+    valid_rows: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    seen_questions: set[tuple[str, str]] = set()
+    for index, row in enumerate(payload.rows, start=1):
+        business_object = row.business_object.strip()
+        question = row.question.strip()
+        answer = row.answer.strip()
+        risk_level = _normalize_import_risk(row.risk_level)
+        row_errors: list[str] = []
+        if not business_object:
+            row_errors.append("business_object_required")
+        if not question:
+            row_errors.append("question_required")
+        if not answer:
+            row_errors.append("answer_required")
+        if row.status == "archived":
+            row_errors.append("archived_rows_cannot_be_imported")
+        if risk_level not in {"normal", "review", "blocked"}:
+            row_errors.append("risk_level_invalid")
+        duplicate_key = (business_object.casefold(), question.casefold())
+        if duplicate_key in seen_questions:
+            row_errors.append("duplicate_question_in_upload")
+        seen_questions.add(duplicate_key)
+        trigger_keywords = _template_list(row.trigger_keywords)
+        forbidden_commitments = _template_list(row.forbidden_commitments)
+        if not trigger_keywords and question:
+            warnings.append({"row": index, "code": "trigger_keywords_empty", "detail": "将使用问题文本参与命中。"})
+        if risk_level == "blocked" and not forbidden_commitments and not row.handoff_rule.strip():
+            warnings.append({"row": index, "code": "blocked_without_rule", "detail": "阻断项建议填写禁用承诺或转人工规则。"})
+        normalized = {
+            "row_number": index,
+            "business_object": business_object,
+            "question": question,
+            "answer": answer,
+            "trigger_keywords": trigger_keywords,
+            "channel_scope": row.channel_scope.strip() or "all",
+            "risk_level": risk_level,
+            "forbidden_commitments": forbidden_commitments,
+            "handoff_rule": row.handoff_rule.strip(),
+            "source_note": row.source_note.strip(),
+            "status": row.status,
+        }
+        if row_errors:
+            errors.append({"row": index, "codes": row_errors, "item": normalized})
+            continue
+        valid_rows.append(normalized)
+    return KnowledgeImportPrecheckRead(
+        tenant_id=tenant_id,
+        status="passed" if valid_rows and not errors else "blocked",
+        can_import=bool(valid_rows) and not errors,
+        row_count=len(payload.rows),
+        valid_count=len(valid_rows),
+        error_count=len(errors),
+        warning_count=len(warnings),
+        valid_rows=valid_rows,
+        errors=errors,
+        warnings=warnings,
+        required_fields=required_fields,
+        provider_call_performed=False,
+        external_write_performed=False,
+    )
 
 
 def _clean_int_list(values: list[int]) -> list[int]:
@@ -6433,6 +6528,328 @@ def get_knowledge_memory_mesh_overview(
             "formal_customer_signoff_ready": False,
             "scope": "本地知识证据链和质量闭环，不代表真实平台已自动回复",
         },
+    )
+
+
+def precheck_knowledge_import(
+    db: Session,
+    tenant_id: int,
+    payload: KnowledgeImportPrecheckCreate,
+    principal: CurrentPrincipal,
+) -> KnowledgeImportPrecheckRead:
+    _require_same_tenant(db, tenant_id, principal)
+    _require_knowledge_manager(principal)
+    return _knowledge_import_precheck_payload(tenant_id, payload)
+
+
+def create_knowledge_import(
+    db: Session,
+    tenant_id: int,
+    payload: KnowledgeImportCreate,
+    principal: CurrentPrincipal,
+) -> KnowledgeImportBatch:
+    _require_same_tenant(db, tenant_id, principal)
+    _require_knowledge_manager(principal)
+    precheck = _knowledge_import_precheck_payload(tenant_id, payload)
+    batch = KnowledgeImportBatch(
+        tenant_id=tenant_id,
+        source_file_ref=payload.source_file_ref,
+        object_type="customer_service_template",
+        row_count=precheck.row_count,
+        valid_count=precheck.valid_count,
+        error_count=precheck.error_count,
+        status="draft" if precheck.can_import else "precheck_failed",
+        result_payload={
+            "schema_version": "wanfa_knowledge_import_template_v1",
+            "source_file_ref": payload.source_file_ref,
+            "valid_rows": precheck.valid_rows,
+            "errors": precheck.errors,
+            "warnings": precheck.warnings,
+            "published": False,
+            "provider_call_performed": False,
+            "external_write_performed": False,
+        },
+        created_by_id=principal.user.id,
+        created_at=utc_now(),
+    )
+    db.add(batch)
+    db.flush()
+    add_audit_event(
+        db,
+        tenant_id=tenant_id,
+        actor_id=principal.user.id,
+        action="knowledge_import.created",
+        resource_type="knowledge_import_batch",
+        resource_id=str(batch.id),
+        payload={"row_count": batch.row_count, "valid_count": batch.valid_count, "status": batch.status},
+    )
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+def _require_import_batch(db: Session, import_batch_id: int, principal: CurrentPrincipal) -> KnowledgeImportBatch:
+    batch = db.get(KnowledgeImportBatch, import_batch_id)
+    if batch is None or batch.tenant_id != principal.tenant.id:
+        raise HTTPException(status_code=404, detail="knowledge import not found")
+    return batch
+
+
+def run_knowledge_import_sample(
+    db: Session,
+    import_batch_id: int,
+    principal: CurrentPrincipal,
+) -> KnowledgeImportSampleRunRead:
+    _require_knowledge_manager(principal)
+    batch = _require_import_batch(db, import_batch_id, principal)
+    rows = list((batch.result_payload or {}).get("valid_rows") or [])
+    case_results: list[dict[str, Any]] = []
+    hit_cases = 0
+    low_confidence_cases = 0
+    blocked_cases = 0
+    for row in rows:
+        keywords = list(row.get("trigger_keywords") or [])
+        risk_level = str(row.get("risk_level") or "normal")
+        confidence = 0.9 if keywords else 0.62
+        status_value = "passed"
+        if risk_level == "blocked":
+            status_value = "blocked_by_rule"
+            blocked_cases += 1
+        elif confidence < 0.72:
+            status_value = "needs_human_review"
+            low_confidence_cases += 1
+        else:
+            hit_cases += 1
+        case_results.append(
+            {
+                "row_number": row.get("row_number"),
+                "question": row.get("question"),
+                "business_object": row.get("business_object"),
+                "status": status_value,
+                "confidence": confidence,
+                "matched_terms": keywords[:8],
+                "risk_level": risk_level,
+            }
+        )
+    can_publish = bool(rows) and batch.error_count == 0
+    batch.result_payload = {
+        **(batch.result_payload or {}),
+        "sample_run": {
+            "status": "passed" if can_publish else "blocked",
+            "case_results": case_results,
+            "hit_cases": hit_cases,
+            "low_confidence_cases": low_confidence_cases,
+            "blocked_cases": blocked_cases,
+        },
+    }
+    batch.status = "ready_to_publish" if can_publish else batch.status
+    db.add(batch)
+    db.commit()
+    return KnowledgeImportSampleRunRead(
+        tenant_id=batch.tenant_id,
+        import_batch_id=batch.id,
+        status="passed" if can_publish else "blocked",
+        total_cases=len(rows),
+        hit_cases=hit_cases,
+        low_confidence_cases=low_confidence_cases,
+        blocked_cases=blocked_cases,
+        can_publish=can_publish,
+        case_results=case_results,
+        provider_call_performed=False,
+        external_write_performed=False,
+    )
+
+
+def publish_knowledge_import(
+    db: Session,
+    tenant_id: int,
+    payload: KnowledgePublicationCreate,
+    principal: CurrentPrincipal,
+) -> KnowledgePublicationRead:
+    _require_same_tenant(db, tenant_id, principal)
+    _require_knowledge_manager(principal)
+    batch = _require_import_batch(db, payload.import_batch_id, principal)
+    rows = list((batch.result_payload or {}).get("valid_rows") or [])
+    if not rows or batch.error_count:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="knowledge import is not publishable")
+    now = utc_now()
+    version = int(
+        db.scalar(
+            select(func.count(KnowledgeImportBatch.id)).where(
+                KnowledgeImportBatch.tenant_id == tenant_id,
+                KnowledgeImportBatch.status == "published",
+            )
+        )
+        or 0
+    ) + 1
+    created_objects: list[int] = []
+    created_cards: list[int] = []
+    object_by_title: dict[str, BusinessObject] = {}
+    for row in rows:
+        title = str(row["business_object"]).strip()
+        business_object = object_by_title.get(title)
+        if business_object is None:
+            business_object = db.scalar(
+                select(BusinessObject).where(
+                    BusinessObject.tenant_id == tenant_id,
+                    BusinessObject.title == title,
+                    BusinessObject.status == "active",
+                )
+            )
+        if business_object is None:
+            business_object = BusinessObject(
+                tenant_id=tenant_id,
+                type="service",
+                title=title,
+                external_id=f"import:{batch.id}:{len(created_objects) + 1}",
+                summary=str(row.get("source_note") or ""),
+                attrs_json={"source_import_batch_id": batch.id, "publication_version": version},
+                status="active",
+                created_by_id=principal.user.id,
+                updated_by_id=principal.user.id,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(business_object)
+            db.flush()
+            created_objects.append(business_object.id)
+        object_by_title[title] = business_object
+        aliases = [title] + list(row.get("trigger_keywords") or [])
+        for alias in _clean_string_list(aliases):
+            exists = db.scalar(
+                select(BusinessObjectAlias).where(
+                    BusinessObjectAlias.business_object_id == business_object.id,
+                    BusinessObjectAlias.alias == alias,
+                    BusinessObjectAlias.channel_scope == str(row.get("channel_scope") or "all"),
+                )
+            )
+            if exists is None:
+                db.add(
+                    BusinessObjectAlias(
+                        tenant_id=tenant_id,
+                        business_object_id=business_object.id,
+                        alias=alias,
+                        channel_scope=str(row.get("channel_scope") or "all"),
+                        created_at=now,
+                    )
+                )
+        card_status = "active" if row.get("risk_level") != "blocked" and row.get("status") != "draft" else "draft"
+        card = ObjectKnowledgeCard(
+            tenant_id=tenant_id,
+            business_object_id=business_object.id,
+            question=str(row["question"]),
+            answer=str(row["answer"]),
+            trigger_keywords=list(row.get("trigger_keywords") or []),
+            media_refs=[],
+            scope={
+                "channel_scope": row.get("channel_scope") or "all",
+                "risk_level": row.get("risk_level") or "normal",
+                "forbidden_commitments": row.get("forbidden_commitments") or [],
+                "handoff_rule": row.get("handoff_rule") or "",
+                "publication_version": version,
+                "import_batch_id": batch.id,
+            },
+            source=str(row.get("source_note") or f"knowledge_import:{batch.id}"),
+            version=version,
+            status=card_status,
+            created_by_id=principal.user.id,
+            updated_by_id=principal.user.id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(card)
+        db.flush()
+        created_cards.append(card.id)
+    batch.status = "published"
+    batch.result_payload = {
+        **(batch.result_payload or {}),
+        "published": True,
+        "publication_version": version,
+        "published_at": now.isoformat(),
+        "published_by_id": principal.user.id,
+        "publication_note": payload.note,
+        "created_business_object_ids": created_objects,
+        "created_object_knowledge_card_ids": created_cards,
+    }
+    add_audit_event(
+        db,
+        tenant_id=tenant_id,
+        actor_id=principal.user.id,
+        action="knowledge_import.published",
+        resource_type="knowledge_import_batch",
+        resource_id=str(batch.id),
+        payload={"version": version, "created_object_knowledge_card_ids": created_cards},
+    )
+    db.commit()
+    return KnowledgePublicationRead(
+        tenant_id=tenant_id,
+        import_batch_id=batch.id,
+        status="published",
+        version=version,
+        created_business_object_ids=created_objects,
+        created_object_knowledge_card_ids=created_cards,
+        archived_object_knowledge_card_ids=[],
+        message="知识资料已发布，AI 只能引用本次发布后的 active 标准问答。",
+        audit={"external_write_performed": False, "model_call_performed": False},
+    )
+
+
+def rollback_knowledge_publication(
+    db: Session,
+    version_id: int,
+    payload: KnowledgePublicationRollbackCreate,
+    principal: CurrentPrincipal,
+) -> KnowledgePublicationRollbackRead:
+    _require_knowledge_manager(principal)
+    batch = _require_import_batch(db, version_id, principal)
+    created_objects = list((batch.result_payload or {}).get("created_business_object_ids") or [])
+    created_cards = list((batch.result_payload or {}).get("created_object_knowledge_card_ids") or [])
+    now = utc_now()
+    for card_id in created_cards:
+        card = db.get(ObjectKnowledgeCard, card_id)
+        if card is not None and card.tenant_id == batch.tenant_id:
+            card.status = "archived"
+            card.updated_by_id = principal.user.id
+            card.updated_at = now
+    for object_id in created_objects:
+        active_cards = int(
+            db.scalar(
+                select(func.count(ObjectKnowledgeCard.id)).where(
+                    ObjectKnowledgeCard.business_object_id == object_id,
+                    ObjectKnowledgeCard.status == "active",
+                    ~ObjectKnowledgeCard.id.in_(created_cards or [-1]),
+                )
+            )
+            or 0
+        )
+        business_object = db.get(BusinessObject, object_id)
+        if business_object is not None and business_object.tenant_id == batch.tenant_id and active_cards == 0:
+            business_object.status = "archived"
+            business_object.updated_by_id = principal.user.id
+            business_object.updated_at = now
+    batch.status = "rolled_back"
+    batch.result_payload = {
+        **(batch.result_payload or {}),
+        "rollback": {"reason": payload.reason, "rolled_back_at": now.isoformat(), "rolled_back_by_id": principal.user.id},
+    }
+    add_audit_event(
+        db,
+        tenant_id=batch.tenant_id,
+        actor_id=principal.user.id,
+        action="knowledge_import.rolled_back",
+        resource_type="knowledge_import_batch",
+        resource_id=str(batch.id),
+        payload={"reason": payload.reason, "archived_object_knowledge_card_ids": created_cards},
+    )
+    db.commit()
+    return KnowledgePublicationRollbackRead(
+        tenant_id=batch.tenant_id,
+        import_batch_id=batch.id,
+        status="rolled_back",
+        archived_business_object_ids=created_objects,
+        archived_object_knowledge_card_ids=created_cards,
+        reason=payload.reason,
+        external_write_performed=False,
     )
 
 

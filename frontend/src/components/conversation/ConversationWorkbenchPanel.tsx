@@ -818,7 +818,7 @@ export function ConversationWorkbenchPanel({
                           <textarea
                             value={transferNote}
                             onChange={(event) => setTransferNote(event.target.value)}
-                            placeholder="填写需要交接的客户背景、已处理事项或注意点"
+                            placeholder="填写需要交接的客户背景、已跟进事项或注意点"
                             rows={4}
                           />
                         </label>
@@ -1409,7 +1409,7 @@ function getDecisionTime(decision: ReplyDecision) {
 
 function formatReplyDecisionStateLabel(value: string) {
   const labels: Record<string, string> = {
-    auto_reply_ready: "已处理",
+    auto_reply_ready: "AI 可自动回复",
     manual_gate_required: "转人工",
     knowledge_gap: "知识缺口",
     blocked_by_policy: "策略阻断",
@@ -1442,7 +1442,7 @@ function formatReplyDeliveryModeLabel(value: string) {
 }
 
 function formatReplyDecisionNextAction(decision: ReplyDecision) {
-  if (decision.state === "auto_reply_ready") return "进入外发前置门禁";
+  if (decision.state === "auto_reply_ready") return "AI 已生成可回复建议";
   if (decision.state === "manual_gate_required") return "转人工接管";
   if (decision.state === "knowledge_gap") return "补业务对象知识";
   if (decision.state === "blocked_by_policy") return "策略复核";
@@ -1450,7 +1450,7 @@ function formatReplyDecisionNextAction(decision: ReplyDecision) {
 }
 
 function formatReplyDecisionGateLabel(decision: ReplyDecision) {
-  if (decision.state === "auto_reply_ready") return "已处理";
+  if (decision.state === "auto_reply_ready") return "AI 已生成建议";
   if (decision.state === "manual_gate_required") return "异常转人工";
   if (decision.state === "knowledge_gap") return "知识缺口";
   if (decision.state === "blocked_by_policy") return "策略阻断";

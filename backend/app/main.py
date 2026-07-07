@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     accounts,
+    ai_service,
     audit,
     auth,
     channel_connectors,
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(accounts.router)
+    app.include_router(ai_service.router)
     app.include_router(audit.router)
     app.include_router(tenants.router)
     app.include_router(conversations.router)

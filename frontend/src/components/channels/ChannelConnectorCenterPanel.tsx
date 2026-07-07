@@ -25,6 +25,9 @@ import type {
   Channel,
   ChannelAccount,
   ChannelAccountPayload,
+  ChannelConnectorConfig,
+  ChannelConnectorSecretStatus,
+  ChannelConnectorVerification,
   DeliveryFailureReview,
   HumanReviewInboxItem,
   OutboxDeliveryJob,
@@ -42,6 +45,14 @@ type ChannelAccountState =
   | { status: "loading"; channels: Channel[]; accounts: ChannelAccount[] }
   | { status: "ready"; channels: Channel[]; accounts: ChannelAccount[] }
   | { status: "error"; message: string; channels: Channel[]; accounts: ChannelAccount[] };
+
+type ChannelConnectorSelfServiceState = {
+  status: "idle" | "loading" | "ready" | "error";
+  message: string;
+  config: ChannelConnectorConfig | null;
+  secretStatus: ChannelConnectorSecretStatus | null;
+  verification: ChannelConnectorVerification | null;
+};
 
 interface ChannelAccountDraft {
   channelId: string;
@@ -114,7 +125,7 @@ interface ChannelBoundaryRequirement {
   unfinishedReason: string;
 }
 
-type ChannelEntryId = "website" | "wechat_official" | "wechat_miniapp" | "wecom";
+type ChannelEntryId = "website" | "wechat_kf" | "wecom" | "wechat_official" | "wechat_miniapp";
 
 interface ChannelAccessComponent {
   id: string;
@@ -169,9 +180,14 @@ export function ChannelConnectorCenterPanel({
   deliveryJobs,
   workerRun,
   channelAccountState,
+  connectorState,
   hasToken,
   canManageConnector,
   onConfigureChannelAccount,
+  onConfigureConnector,
+  onSaveSecrets,
+  onDeleteSecrets,
+  onVerifyConnector,
   onRefreshChannelAccounts,
   onCreateSafeTestConversation,
   tenantId
@@ -183,9 +199,14 @@ export function ChannelConnectorCenterPanel({
   deliveryJobs: OutboxDeliveryJob[];
   workerRun: TrustedInboundWorkerRun | null;
   channelAccountState: ChannelAccountState;
+  connectorState?: ChannelConnectorSelfServiceState;
   hasToken: boolean;
   canManageConnector: boolean;
   onConfigureChannelAccount: (channelId: number, payload: ChannelAccountPayload) => Promise<ChannelAccount>;
+  onConfigureConnector?: (channelId: number, provider: string) => Promise<ChannelConnectorConfig>;
+  onSaveSecrets?: (channelId: number, secrets: Record<string, string>) => Promise<ChannelConnectorSecretStatus>;
+  onDeleteSecrets?: (channelId: number) => Promise<ChannelConnectorSecretStatus>;
+  onVerifyConnector?: (channelId: number) => Promise<ChannelConnectorVerification>;
   onRefreshChannelAccounts: () => void;
   onCreateSafeTestConversation?: () => Promise<unknown | null>;
   tenantId?: string | number;
@@ -219,6 +240,16 @@ export function ChannelConnectorCenterPanel({
     publicNote: ""
   });
   const [accountSaveState, setAccountSaveState] = useState<{ status: "idle" | "saving" | "success" | "error"; message: string }>({
+    status: "idle",
+    message: ""
+  });
+  const [secretDraft, setSecretDraft] = useState({
+    token: "",
+    encodingAesKey: "",
+    appSecret: "",
+    webhookSigningSecret: ""
+  });
+  const [connectorActionState, setConnectorActionState] = useState<{ status: "idle" | "saving" | "success" | "error"; message: string }>({
     status: "idle",
     message: ""
   });
@@ -310,6 +341,82 @@ export function ChannelConnectorCenterPanel({
     }
   }
 
+  async function submitConnectorConfig(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!accountDraft.channelId) {
+      setConnectorActionState({ status: "error", message: "请先选择租户渠道。" });
+      return;
+    }
+    if (!onConfigureConnector) {
+      setConnectorActionState({ status: "error", message: "当前页面未接入连接器配置接口。" });
+      return;
+    }
+    setConnectorActionState({ status: "saving", message: "正在保存连接器配置..." });
+    try {
+      const provider = normalizeProviderForChannelEntry(accountDraft.provider || activeEntry.id);
+      await onConfigureConnector(Number(accountDraft.channelId), provider);
+      setConnectorActionState({ status: "success", message: "连接器已保存；默认仍只生成草稿或入站，不开启真实外发。" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存连接器失败";
+      setConnectorActionState({ status: "error", message });
+    }
+  }
+
+  async function saveConnectorSecrets() {
+    if (!accountDraft.channelId || !onSaveSecrets) {
+      setConnectorActionState({ status: "error", message: "请先选择租户渠道并保存连接器。" });
+      return;
+    }
+    setConnectorActionState({ status: "saving", message: "正在保存密钥..." });
+    try {
+      const secrets: Record<string, string> = {
+        token: secretDraft.token,
+        encoding_aes_key: secretDraft.encodingAesKey,
+        app_secret: secretDraft.appSecret,
+        webhook_signing_secret: secretDraft.webhookSigningSecret
+      };
+      await onSaveSecrets(Number(accountDraft.channelId), secrets);
+      setSecretDraft({ token: "", encodingAesKey: "", appSecret: "", webhookSigningSecret: "" });
+      setConnectorActionState({ status: "success", message: "密钥已保存，页面不会回显明文。" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存密钥失败";
+      setConnectorActionState({ status: "error", message });
+    }
+  }
+
+  async function clearConnectorSecrets() {
+    if (!accountDraft.channelId || !onDeleteSecrets) {
+      setConnectorActionState({ status: "error", message: "请先选择租户渠道。" });
+      return;
+    }
+    setConnectorActionState({ status: "saving", message: "正在清空密钥..." });
+    try {
+      await onDeleteSecrets(Number(accountDraft.channelId));
+      setConnectorActionState({ status: "success", message: "密钥已清空。" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "清空密钥失败";
+      setConnectorActionState({ status: "error", message });
+    }
+  }
+
+  async function verifyConnectorConfig() {
+    if (!accountDraft.channelId || !onVerifyConnector) {
+      setConnectorActionState({ status: "error", message: "请先选择租户渠道并保存连接器。" });
+      return;
+    }
+    setConnectorActionState({ status: "saving", message: "正在验证配置..." });
+    try {
+      const result = await onVerifyConnector(Number(accountDraft.channelId));
+      setConnectorActionState({
+        status: result.status === "verified" ? "success" : "error",
+        message: result.status === "verified" ? "配置完整，默认不真实外发。" : `配置未完成：${result.missing_fields.join("、") || result.status}`
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "验证配置失败";
+      setConnectorActionState({ status: "error", message });
+    }
+  }
+
   const activeEntry = CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === activeChannelId) ?? CHANNEL_ENTRY_DEFINITIONS[0];
   const activeComponents = activeEntry.id === "website" ? websiteComponents : activeEntry.components;
   const componentTypes = Array.from(new Set(activeComponents.map((component) => component.componentType)));
@@ -329,6 +436,14 @@ export function ChannelConnectorCenterPanel({
   const guideSteps = getChannelGuideSteps(activeEntry.id);
   const apiFields = getChannelApiFields(activeEntry.id);
   const backendHooks = getChannelBackendHooks(activeEntry.id);
+  const connectorSecretStatus = connectorState?.secretStatus ?? null;
+  const connectorVerification = connectorState?.verification ?? null;
+  const connectorFieldStatusText = connectorSecretStatus
+    ? Object.entries(connectorSecretStatus.field_status).map(([field, status]) => ` ${field}:${status}`).join(" · ")
+    : " 尚未保存";
+  const connectorVerificationText = connectorVerification
+    ? `最近验证：${connectorVerification.status} · webhook ${connectorVerification.webhook_path}`
+    : "";
   const selectedComponent =
     activeComponents.find((component) => component.id === selectedComponentId) ??
     activeComponents[0];
@@ -647,8 +762,8 @@ export function ChannelConnectorCenterPanel({
             </div>
             <div className="miduoke-api-contract" aria-label={`${activeEntry.label}后端接口预留`}>
               <div>
-                <strong>后端接口预留</strong>
-                <small>按钮后续接这些字段</small>
+                <strong>已接后端端口</strong>
+                <small>客户按文档配置后，请求会进入这些接口</small>
               </div>
               <dl>
                 {apiFields.map((field) => (
@@ -895,7 +1010,7 @@ export function ChannelConnectorCenterPanel({
           <span>配置准备，不代表平台已接通</span>
         </div>
         <p>
-          这里用于试跑前明确谁负责接待、谁维护知识、谁处理运维。企业微信、微信客服、公众号、抖音、淘宝、京东、拼多多、小红书都只展示官方接入条件、所需资料、当前状态和未接通原因。
+          这里用于试跑前明确谁负责接待、谁维护知识、谁处理运维。网站、微信客服、企业微信、微信公众号、微信小程序只展示官方接入条件、所需资料、当前状态和未接通原因。
         </p>
         <div className="channel-role-grid" aria-label="渠道试跑角色配置">
           {CHANNEL_ROLE_RESPONSIBILITIES.map((item) => (
@@ -1084,7 +1199,7 @@ export function ChannelConnectorCenterPanel({
                 <input
                   value={accountDraft.platform}
                   onChange={(event) => setAccountDraft((current) => ({ ...current, platform: event.target.value }))}
-                  placeholder="例如：微信客服 / 抖音 / 淘宝"
+                  placeholder="例如：网站 / 微信客服 / 企业微信"
                   disabled={!hasToken || !canManageConnector}
                 />
               </label>
@@ -1205,6 +1320,122 @@ export function ChannelConnectorCenterPanel({
             ) : null}
           </form>
         </div>
+        <div className="channel-account-form-card" data-channel-self-service-connector="true">
+          <div className="knowledge-section-title">
+            <ShieldCheck size={18} />
+            <strong>自助连接器与密钥状态</strong>
+          </div>
+          <form className="channel-account-form" onSubmit={submitConnectorConfig}>
+            <div className="channel-account-form-grid">
+              <label>
+                <span>租户渠道</span>
+                <select
+                  value={accountDraft.channelId}
+                  onChange={(event) => setAccountDraft((current) => ({ ...current, channelId: event.target.value }))}
+                  disabled={!hasToken || !canManageConnector || availableChannels.length === 0}
+                >
+                  <option value="">选择租户渠道</option>
+                  {availableChannels.map((channel) => (
+                    <option key={channel.id} value={channel.id}>
+                      {channel.name} · {channel.type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Provider</span>
+                <input
+                  value={normalizeProviderForChannelEntry(accountDraft.provider || activeEntry.id)}
+                  onChange={(event) => setAccountDraft((current) => ({ ...current, provider: event.target.value }))}
+                  disabled={!hasToken || !canManageConnector}
+                />
+              </label>
+              <label>
+                <span>连接器状态</span>
+                <input value={connectorState?.config?.status ?? "未保存"} readOnly />
+              </label>
+              <label>
+                <span>密钥状态</span>
+                <input value={connectorState?.secretStatus?.status ?? connectorState?.config?.secret_status ?? "missing"} readOnly />
+              </label>
+            </div>
+            <div className="channel-account-form-footer">
+              <small>保存连接器只建立自助配置骨架；真实外发保持关闭，密钥不会回显。</small>
+              <button type="submit" className="primary-button compact" disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}>
+                保存连接器
+              </button>
+            </div>
+          </form>
+          <div className="channel-account-form-grid">
+            <label>
+              <span>Token</span>
+              <input
+                type="password"
+                value={secretDraft.token}
+                onChange={(event) => setSecretDraft((current) => ({ ...current, token: event.target.value }))}
+                placeholder="保存后不回显"
+                disabled={!hasToken || !canManageConnector}
+              />
+            </label>
+            <label>
+              <span>EncodingAESKey</span>
+              <input
+                type="password"
+                value={secretDraft.encodingAesKey}
+                onChange={(event) => setSecretDraft((current) => ({ ...current, encodingAesKey: event.target.value }))}
+                placeholder="保存后不回显"
+                disabled={!hasToken || !canManageConnector}
+              />
+            </label>
+            <label>
+              <span>AppSecret</span>
+              <input
+                type="password"
+                value={secretDraft.appSecret}
+                onChange={(event) => setSecretDraft((current) => ({ ...current, appSecret: event.target.value }))}
+                placeholder="保存后不回显"
+                disabled={!hasToken || !canManageConnector}
+              />
+            </label>
+            <label>
+              <span>Webhook Secret</span>
+              <input
+                type="password"
+                value={secretDraft.webhookSigningSecret}
+                onChange={(event) => setSecretDraft((current) => ({ ...current, webhookSigningSecret: event.target.value }))}
+                placeholder="网站渠道可用"
+                disabled={!hasToken || !canManageConnector}
+              />
+            </label>
+          </div>
+          <div className="channel-account-form-footer">
+            <small>
+              字段状态：
+              {connectorFieldStatusText}
+            </small>
+            <div className="channel-config-actions">
+              <button type="button" className="secondary-action compact" onClick={saveConnectorSecrets} disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}>
+                保存密钥
+              </button>
+              <button type="button" className="ghost-action compact" onClick={verifyConnectorConfig} disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}>
+                验证配置
+              </button>
+              <button type="button" className="ghost-action compact" onClick={clearConnectorSecrets} disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}>
+                清空密钥
+              </button>
+            </div>
+          </div>
+          {connectorVerificationText ? (
+            <p className="channel-account-state-note success">
+              {connectorVerificationText}
+            </p>
+          ) : null}
+          {(connectorActionState.message || connectorState?.message) ? (
+            <p className={`channel-account-state-note ${connectorActionState.status === "idle" ? connectorState?.status ?? "idle" : connectorActionState.status}`}>
+              {connectorActionState.message || connectorState?.message}
+            </p>
+          ) : null}
+        </div>
       </section>
 
       <section
@@ -1311,9 +1542,10 @@ export function ChannelConnectorCenterPanel({
 function getChannelTableTitle(id: ChannelEntryId) {
   const titles: Record<ChannelEntryId, string> = {
     website: "接待组件列表",
+    wechat_kf: "微信客服列表",
+    wecom: "企业微信列表",
     wechat_official: "公众号列表",
-    wechat_miniapp: "微信小程序列表",
-    wecom: "企业微信列表"
+    wechat_miniapp: "微信小程序列表"
   };
   return titles[id];
 }
@@ -1321,9 +1553,10 @@ function getChannelTableTitle(id: ChannelEntryId) {
 function getChannelSearchPlaceholder(id: ChannelEntryId) {
   const placeholders: Record<ChannelEntryId, string> = {
     website: "请输入组件名称",
+    wechat_kf: "搜索微信客服账号",
+    wecom: "搜索企业微信应用",
     wechat_official: "搜索公众号",
-    wechat_miniapp: "搜索小程序名称",
-    wecom: "搜索应用名称"
+    wechat_miniapp: "搜索小程序名称"
   };
   return placeholders[id];
 }
@@ -1331,9 +1564,10 @@ function getChannelSearchPlaceholder(id: ChannelEntryId) {
 function getChannelTableColumns(id: ChannelEntryId) {
   const columns: Record<ChannelEntryId, string[]> = {
     website: ["组件样式", "组件名称/类型", "挂载位置", "更新时间", "操作"],
+    wechat_kf: ["微信客服", "open_kfid", "回调状态", "回复模式", "接入时间", "操作"],
+    wecom: ["企业微信", "应用名称", "企业ID", "应用ID", "接入时间", "操作"],
     wechat_official: ["公众号", "账号类型", "认证状态", "粉丝数", "互动粉丝数...", "接入方式", "接入时间"],
-    wechat_miniapp: ["微信小程序", "接入方式", "接入时间", "操作"],
-    wecom: ["企业微信", "应用名称", "企业ID", "应用ID", "接入时间", "操作"]
+    wechat_miniapp: ["微信小程序", "接入方式", "接入时间", "操作"]
   };
   return columns[id];
 }
@@ -1341,9 +1575,10 @@ function getChannelTableColumns(id: ChannelEntryId) {
 function getChannelGridTemplate(id: ChannelEntryId) {
   const templates: Record<ChannelEntryId, string> = {
     website: "170px minmax(180px, 1fr) minmax(150px, 0.8fr) 160px 250px",
+    wechat_kf: "190px 180px 150px 150px 150px 210px",
+    wecom: "190px 190px 190px 130px 150px 210px",
     wechat_official: "180px 150px 150px 120px 120px 180px 140px",
-    wechat_miniapp: "minmax(220px, 1fr) minmax(220px, 1fr) 150px 220px",
-    wecom: "190px 190px 190px 130px 150px 210px"
+    wechat_miniapp: "minmax(220px, 1fr) minmax(220px, 1fr) 150px 220px"
   };
   return templates[id];
 }
@@ -1351,6 +1586,11 @@ function getChannelGridTemplate(id: ChannelEntryId) {
 function getChannelAccessNotes(id: ChannelEntryId) {
   const notes: Record<ChannelEntryId, string[]> = {
     website: [],
+    wechat_kf: [
+      "*微信客服需要客户自行在微信后台取得 open_kfid、Token、EncodingAESKey 和 AppSecret",
+      "*验证通过前只生成草稿或转人工，不自动向微信外发"
+    ],
+    wecom: [],
     wechat_official: [
       "*你的公众号必须是认证过的微信订阅号或服务号，否则无法正常回复顾客对话",
       "*接入后，之前设置好的菜单、自动回复等功能仍然有效"
@@ -1358,8 +1598,7 @@ function getChannelAccessNotes(id: ChannelEntryId) {
     wechat_miniapp: [
       "*接入前你的小程序需完成认证才能正常使用本功能",
       "*接入后，所有小程序用户的客服消息会被转发到米多客"
-    ],
-    wecom: []
+    ]
   };
   return notes[id];
 }
@@ -1371,6 +1610,16 @@ function getChannelGuideSteps(id: ChannelEntryId) {
       "完成域名校验后，把代码放到网站页面。",
       "上线前先预览组件，确认按钮和聊天链接可打开。"
     ],
+    wechat_kf: [
+      "在微信客服后台准备 open_kfid、Token、EncodingAESKey 和 AppSecret。",
+      "在本系统保存配置并确认 webhook 地址。",
+      "完成入站测试后，再进入白名单自动回复验收。"
+    ],
+    wecom: [
+      "绑定企业微信账号，选择扫码或手动接入。",
+      "准备回调 URL、Token、EncodingAESKey 等配置。",
+      "完成后测试员工消息是否能进入统一接待。"
+    ],
     wechat_official: [
       "使用扫码接入或手动填写公众号开发配置。",
       "确认公众号已认证，并拥有客服消息相关权限。",
@@ -1380,11 +1629,6 @@ function getChannelGuideSteps(id: ChannelEntryId) {
       "先确认小程序已完成认证并开启客服能力。",
       "通过扫码或手动方式接入小程序。",
       "在小程序页面中配置客服按钮或咨询入口。"
-    ],
-    wecom: [
-      "绑定企业微信账号，选择扫码或手动接入。",
-      "准备回调 URL、Token、EncodingAESKey 等配置。",
-      "完成后测试员工消息是否能进入统一接待。"
     ]
   };
   return steps[id];
@@ -1398,6 +1642,18 @@ function getChannelApiFields(id: ChannelEntryId) {
       { label: "visitor_id", value: "访客会话 ID" },
       { label: "handoff_queue", value: "转人工队列" }
     ],
+    wechat_kf: [
+      { label: "open_kfid", value: "微信客服账号 ID" },
+      { label: "callback_url", value: "接收微信客服消息的回调地址" },
+      { label: "token / aes_key", value: "签名校验与消息解密" },
+      { label: "app_secret", value: "同步消息和后续发送所需凭据" }
+    ],
+    wecom: [
+      { label: "corp_id / secret", value: "企业与应用凭证" },
+      { label: "callback_url", value: "API 接收消息地址" },
+      { label: "token / aes_key", value: "签名校验与消息解密" },
+      { label: "agent_id", value: "企业微信应用 ID" }
+    ],
     wechat_official: [
       { label: "appid / secret", value: "公众号凭证" },
       { label: "server_url", value: "微信服务器回调 URL" },
@@ -1409,12 +1665,6 @@ function getChannelApiFields(id: ChannelEntryId) {
       { label: "open-type", value: "contact" },
       { label: "session-from", value: "来源透传参数" },
       { label: "message_card", value: "show-message-card / path" }
-    ],
-    wecom: [
-      { label: "corp_id / secret", value: "企业与微信客服凭证" },
-      { label: "callback_url", value: "API 接收消息地址" },
-      { label: "token / aes_key", value: "签名校验与消息解密" },
-      { label: "kf_id", value: "客服账号 / 会话分配" }
     ]
   };
   return fields[id];
@@ -1422,10 +1672,41 @@ function getChannelApiFields(id: ChannelEntryId) {
 
 function getChannelBackendHooks(id: ChannelEntryId) {
   const hooks: Record<ChannelEntryId, string[]> = {
-    website: ["POST /api/channels/website/widgets", "POST /api/conversations/visitor"],
-    wechat_official: ["POST /api/channels/wechat-official/callback", "POST /api/channels/wechat-official/custom-send"],
-    wechat_miniapp: ["POST /api/channels/wechat-miniapp/contact", "POST /api/channels/wechat-miniapp/message-push"],
-    wecom: ["POST /api/channels/wecom/callback", "POST /api/channels/wecom/kf/sync"]
+    website: [
+      "POST /api/public/website-widget/messages",
+      "GET /api/public/website-widget/messages",
+      "POST /api/channels/{channel_id}/connector-config",
+      "POST /api/channels/{channel_id}/connector-secrets",
+      "POST /api/channels/{channel_id}/connector-verification"
+    ],
+    wechat_kf: [
+      "GET /api/webhooks/wechat-kf/channels/{channel_id}",
+      "POST /api/webhooks/wechat-kf/channels/{channel_id}",
+      "POST /api/channels/{channel_id}/connector-config",
+      "POST /api/channels/{channel_id}/connector-secrets",
+      "POST /api/channels/{channel_id}/connector-verification"
+    ],
+    wecom: [
+      "GET /api/webhooks/wecom/channels/{channel_id}",
+      "POST /api/webhooks/wecom/channels/{channel_id}",
+      "POST /api/channels/{channel_id}/connector-config",
+      "POST /api/channels/{channel_id}/connector-secrets",
+      "POST /api/channels/{channel_id}/connector-verification"
+    ],
+    wechat_official: [
+      "GET /api/webhooks/wechat-official-account/channels/{channel_id}",
+      "POST /api/webhooks/wechat-official-account/channels/{channel_id}",
+      "POST /api/channels/{channel_id}/connector-config",
+      "POST /api/channels/{channel_id}/connector-secrets",
+      "POST /api/channels/{channel_id}/connector-verification"
+    ],
+    wechat_miniapp: [
+      "GET /api/webhooks/wechat-miniapp/channels/{channel_id}",
+      "POST /api/webhooks/wechat-miniapp/channels/{channel_id}",
+      "POST /api/channels/{channel_id}/connector-config",
+      "POST /api/channels/{channel_id}/connector-secrets",
+      "POST /api/channels/{channel_id}/connector-verification"
+    ]
   };
   return hooks[id];
 }
@@ -1467,6 +1748,70 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
         status: "enabled",
         updatedAt: "2026-07-07 09:30",
         description: "可复制到按钮、菜单或二维码里的顾客咨询链接。"
+      }
+    ]
+  },
+  {
+    id: "wechat_kf",
+    label: "微信客服",
+    subtitle: "客服链接 / 微信内咨询",
+    description: "客户自行在微信客服后台配置回调和密钥后，可把咨询消息接入本工作台；默认先进入草稿或人工确认。",
+    componentQuota: 2,
+    setupHint: "请先准备 open_kfid、Token、EncodingAESKey 和 AppSecret，再在系统内保存配置。",
+    primaryAction: "配置微信客服",
+    secondaryAction: "查看回调地址",
+    components: [
+      {
+        id: "wechat-kf-link",
+        name: "微信客服链接",
+        componentType: "链接型",
+        style: "link",
+        mount: "微信内链接 / 官网按钮",
+        status: "draft",
+        updatedAt: "2026-07-07 09:30",
+        description: "客户点击链接进入微信客服会话，消息接入后由 AI 先接待。"
+      },
+      {
+        id: "wechat-kf-qrcode",
+        name: "微信客服二维码",
+        componentType: "二维码型",
+        style: "qrcode",
+        mount: "门店 / 海报 / 帮助中心",
+        status: "planned",
+        updatedAt: "2026-07-07 09:30",
+        description: "客户扫码进入微信客服，未验证前不自动外发。"
+      }
+    ]
+  },
+  {
+    id: "wecom",
+    label: "企业微信",
+    subtitle: "企微客户联系 / 回调接入",
+    description: "客户自行在企业微信后台配置回调 URL、Token 和 EncodingAESKey；验证通过前只生成草稿或转人工。",
+    componentQuota: 2,
+    setupHint: "当前先完成自助配置和入站测试，真实外发需要白名单验收。",
+    primaryAction: "配置企业微信",
+    secondaryAction: "回调配置",
+    components: [
+      {
+        id: "wecom-service-link",
+        name: "企微客服入口",
+        componentType: "链接型",
+        style: "link",
+        mount: "微信内链接 / 官网按钮",
+        status: "draft",
+        updatedAt: "2026-07-07 09:30",
+        description: "顾客点击入口进入企业微信客服会话。"
+      },
+      {
+        id: "wecom-qrcode",
+        name: "企微二维码",
+        componentType: "二维码型",
+        style: "qrcode",
+        mount: "门店 / 海报 / 官网",
+        status: "planned",
+        updatedAt: "2026-07-07 09:30",
+        description: "顾客扫码进入企业微信客服。"
       }
     ]
   },
@@ -1531,38 +1876,6 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
         status: "planned",
         updatedAt: "2026-07-07 09:30",
         description: "把咨询入口嵌入小程序业务页面。"
-      }
-    ]
-  },
-  {
-    id: "wecom",
-    label: "企业微信",
-    subtitle: "微信客服链接 / 二维码",
-    description: "通过企业微信客服链接、二维码或微信内入口承接客户咨询；正式接入需要回调 URL、Token 和 EncodingAESKey。",
-    componentQuota: 2,
-    setupHint: "当前先模拟客户从企业微信客服链接进入咨询。",
-    primaryAction: "新建企微入口",
-    secondaryAction: "回调配置",
-    components: [
-      {
-        id: "wecom-service-link",
-        name: "客服链接",
-        componentType: "链接型",
-        style: "link",
-        mount: "微信内链接 / 官网按钮",
-        status: "draft",
-        updatedAt: "2026-07-07 09:30",
-        description: "顾客点击链接进入企业微信客服会话。"
-      },
-      {
-        id: "wecom-qrcode",
-        name: "客服二维码",
-        componentType: "二维码型",
-        style: "qrcode",
-        mount: "门店 / 海报 / 官网",
-        status: "planned",
-        updatedAt: "2026-07-07 09:30",
-        description: "顾客扫码进入企业微信客服。"
       }
     ]
   }
@@ -1700,53 +2013,39 @@ const CHANNEL_ROLE_RESPONSIBILITIES: ChannelRoleResponsibility[] = [
 
 const CHANNEL_BOUNDARY_REQUIREMENTS: ChannelBoundaryRequirement[] = [
   {
-    channel: "企业微信 / 微信客服",
-    officialCondition: "企业微信后台应用权限、客服账号、回调地址、Token 和 EncodingAESKey。",
+    channel: "网站",
+    officialCondition: "网站组件、访客标识、入站消息接口和工作台会话状态机。",
+    requiredMaterials: "网站域名、组件安装位置、测试访客、自动回复白名单。",
+    currentStatus: "优先接入",
+    unfinishedReason: "需要先完成资料发布、AI 服务状态和转人工闭环验收。"
+  },
+  {
+    channel: "微信客服",
+    officialCondition: "微信客服后台账号、客服链接、回调地址、Token、EncodingAESKey 和 AppSecret。",
+    requiredMaterials: "企业主体、客服账号、open_kfid、测试白名单、官方后台截图。",
+    currentStatus: "配置骨架",
+    unfinishedReason: "需要客户在微信客服后台自助填写回调和凭据后验证。"
+  },
+  {
+    channel: "企业微信",
+    officialCondition: "企业微信后台应用权限、AgentId、Secret、回调地址、Token 和 EncodingAESKey。",
     requiredMaterials: "企业主体、接待人员、客服链接、测试白名单、官方后台截图。",
-    currentStatus: "配置准备中",
+    currentStatus: "配置骨架",
     unfinishedReason: "需要客户主体后台授权、可信公网地址和验签解密闭环。"
   },
   {
     channel: "微信公众号",
     officialCondition: "公众号开发配置、消息加解密、客服消息权限和服务号能力。",
     requiredMaterials: "公众号主体、开发者权限、测试号或服务号、消息权限说明。",
-    currentStatus: "未接通",
+    currentStatus: "配置骨架",
     unfinishedReason: "尚未提供公众号后台权限和测试消息回调条件。"
   },
   {
-    channel: "抖音 / 抖店",
-    officialCondition: "抖音开放平台、抖店或飞鸽官方能力，或服务商授权。",
-    requiredMaterials: "店铺主体、应用权限包、客服消息权限、服务商授权材料。",
-    currentStatus: "未接通",
-    unfinishedReason: "尚未确认官方消息接口权限，不使用网页私信模拟发送。"
-  },
-  {
-    channel: "淘宝 / 天猫",
-    officialCondition: "开放平台、店铺授权、服务市场或官方客服机器人能力。",
-    requiredMaterials: "店铺授权、应用权限、客服机器人权限、测试订单或测试会话。",
-    currentStatus: "未接通",
-    unfinishedReason: "尚未取得店铺授权和可验收的官方消息接口。"
-  },
-  {
-    channel: "京东",
-    officialCondition: "京东开放平台或服务商授权的客服相关接口。",
-    requiredMaterials: "店铺主体、开放平台应用、客服权限、测试白名单。",
-    currentStatus: "未接通",
-    unfinishedReason: "尚未完成平台权限确认和回执审计设计。"
-  },
-  {
-    channel: "拼多多",
-    officialCondition: "拼多多开放平台、店铺授权或服务市场能力。",
-    requiredMaterials: "店铺授权、消息权限、客服工具权限、测试场景。",
-    currentStatus: "未接通",
-    unfinishedReason: "尚未取得官方自动回复接口验收条件。"
-  },
-  {
-    channel: "小红书",
-    officialCondition: "小红书开放平台、商业私信工具或官方服务商授权。",
-    requiredMaterials: "企业主体、账号权限、私信工具权限、官方授权说明。",
-    currentStatus: "未接通",
-    unfinishedReason: "尚未确认官方消息能力，不使用 Cookie 复用或账号托管。"
+    channel: "微信小程序",
+    officialCondition: "小程序 AppID、AppSecret、Token、EncodingAESKey 和咨询入口配置。",
+    requiredMaterials: "小程序主体、开发者权限、测试入口、消息能力边界。",
+    currentStatus: "配置骨架",
+    unfinishedReason: "小程序咨询入口和主动发送边界需要单独验收。"
   }
 ];
 
@@ -1785,58 +2084,69 @@ const HEALTH_STATUS_OPTIONS = [
 
 const CHANNEL_SANDBOX_PRIORITIES: ChannelSandboxPriority[] = [
   {
+    id: "website",
+    channel: "网站",
+    formalPath: "第一优先级：网站组件入站、资料发布、AI 回复、转人工和人工回复闭环。",
+    currentStatus: "本阶段完整跑通。",
+    sandboxPriority: "先完成端到端验收",
+    rpaBoundary: "网站渠道也必须受资料发布、模型状态、风险门禁和白名单控制。"
+  },
+  {
+    id: "wechat-kf",
+    channel: "微信客服",
+    formalPath: "第二优先级：微信客服后台配置、URL 验证、AES 解密、入站标准化。",
+    currentStatus: "配置骨架，默认不真实外发。",
+    sandboxPriority: "网站闭环后推进",
+    rpaBoundary: "不使用个人微信外挂、非官方插件、群控或模拟点击。"
+  },
+  {
     id: "wecom",
-    channel: "企业微信 / 微信客服",
-    formalPath: "第一优先级：官方回调、URL 验证、AES 解密、入站验签、白名单发送。",
-    currentStatus: "测试接入优先，真实外发继续关闭。",
-    sandboxPriority: "先做单渠道官方测试接入",
+    channel: "企业微信",
+    formalPath: "第三优先级：官方回调、URL 验证、AES 解密、入站验签。",
+    currentStatus: "配置骨架，真实外发继续关闭。",
+    sandboxPriority: "微信客服后推进",
     rpaBoundary: "不使用个人微信外挂、非官方插件、群控或模拟点击。"
   },
   {
     id: "official-account",
     channel: "微信公众号",
-    formalPath: "第二优先级：公众号后台开发配置、消息加解密、客服消息权限。",
+    formalPath: "第四优先级：公众号后台开发配置、消息加解密、客服消息权限。",
     currentStatus: "待官方测试号或服务号权限。",
-    sandboxPriority: "企业微信稳定后再推进",
+    sandboxPriority: "企业微信后推进",
     rpaBoundary: "不模拟个人微信聊天窗口，不托管个人号。"
   },
   {
-    id: "douyin",
-    channel: "抖音 / 抖店",
-    formalPath: "只走抖音开放平台、抖店/飞鸽官方能力或服务商授权。",
-    currentStatus: "未接入，待权限包确认。",
-    sandboxPriority: "确认官方消息接口后再测试接入",
-    rpaBoundary: "网页私信只能做 draft-only 研究，不能写成商家客服接通。"
-  },
-  {
-    id: "xiaohongshu",
-    channel: "小红书",
-    formalPath: "只走开放平台、商业私信工具或官方服务商授权。",
-    currentStatus: "未接入，待主体与权限确认。",
-    sandboxPriority: "低于微信和抖音",
-    rpaBoundary: "不使用账号托管、Cookie 复用或后台模拟发送。"
-  },
-  {
-    id: "ecommerce",
-    channel: "淘宝 / 天猫 / 京东 / 拼多多",
-    formalPath: "只走开放平台、店铺授权、服务市场或客服机器人官方包。",
-    currentStatus: "未接入，逐平台验收。",
-    sandboxPriority: "先选一个真实试点店铺",
-    rpaBoundary: "商家后台 RPA 只允许草稿和证据采集，不默认点击发送。"
+    id: "wechat-miniapp",
+    channel: "微信小程序",
+    formalPath: "第五优先级：小程序咨询入口、开发配置、消息能力边界验收。",
+    currentStatus: "配置骨架，默认不真实外发。",
+    sandboxPriority: "公众号后推进",
+    rpaBoundary: "不承诺无限制主动发送，按微信平台规则验收。"
   }
 ];
 
 function formatProviderName(value: string) {
   const labels: Record<string, string> = {
-    wecom: "微信客服",
+    wecom: "企业微信",
+    wechat_kf: "微信客服",
+    wechat_official_account: "微信公众号",
+    wechat_miniapp: "微信小程序",
     official_account: "公众号",
-    douyin: "抖音",
-    taobao: "淘宝",
-    jd: "京东",
-    pdd: "拼多多",
     website: "官网"
   };
   return labels[value] ?? (value || "未登记平台");
+}
+
+function normalizeProviderForChannelEntry(value: string) {
+  const aliases: Record<string, string> = {
+    website: "website",
+    wechat_kf: "wechat_kf",
+    wecom: "wecom",
+    wechat_official: "wechat_official_account",
+    wechat_official_account: "wechat_official_account",
+    wechat_miniapp: "wechat_miniapp"
+  };
+  return aliases[value] ?? value;
 }
 
 function formatAuthorizationStatus(value: string) {
@@ -2011,6 +2321,20 @@ function buildChannelConnectorCards({
 
   const officialOnly = [
     {
+      id: "website",
+      name: "网站",
+      summary: "先完成网站组件、访客消息、AI 回复、转人工和人工回复闭环。",
+      prerequisites: ["网站域名和组件安装位置", "测试访客和工作台账号", "已发布资料和自动回复白名单"],
+      nextAction: "先用网站渠道跑通完整验收链路。"
+    },
+    {
+      id: "wechat-kf",
+      name: "微信客服",
+      summary: "客户在微信客服后台配置回调和凭据，系统只保存脱敏状态并做验证。",
+      prerequisites: ["open_kfid 和企业主体", "Token、EncodingAESKey、AppSecret", "回调地址验证条件"],
+      nextAction: "网站闭环后填写微信客服配置并做入站测试。"
+    },
+    {
       id: "wechat-official-account",
       name: "微信公众号",
       summary: "适合服务号消息、菜单入口和模板/客服能力。需要公众号后台权限和官方开发配置。",
@@ -2018,32 +2342,11 @@ function buildChannelConnectorCards({
       nextAction: "先拿公众号后台管理员权限和测试号，不使用个人微信外挂。"
     },
     {
-      id: "douyin-shop",
-      name: "抖音 / 抖店",
-      summary: "适合电商售前售后，但必须确认抖店开放平台、飞鸽/IM 能力和服务商授权范围。",
-      prerequisites: ["店铺主体认证", "开放平台应用或服务商授权", "客服消息接口权限包确认"],
-      nextAction: "先确认开放平台权限和服务商合同，再做测试接入。"
-    },
-    {
-      id: "xiaohongshu",
-      name: "小红书",
-      summary: "品牌私信和店铺咨询能力受平台开放范围影响，不能用模拟点击或账号托管替代接口。",
-      prerequisites: ["企业号或店铺官方权限", "开放接口或服务商路径确认", "内容合规和人工兜底策略"],
-      nextAction: "先确认官方接口是否对当前主体开放。"
-    },
-    {
-      id: "taobao-tmall",
-      name: "淘宝 / 天猫",
-      summary: "需要走淘宝开放平台、店铺授权和消息/订单相关权限，不把商家后台 RPA 当正式能力。",
-      prerequisites: ["店铺授权", "开放平台应用审核", "订单、售后、客服消息权限范围确认"],
-      nextAction: "先按店铺主体申请开放平台应用或服务商接入。"
-    },
-    {
-      id: "jd-pdd",
-      name: "京东 / 拼多多",
-      summary: "电商客服强依赖平台授权、类目权限和服务商生态；正式上线前需单平台逐个验收。",
-      prerequisites: ["店铺主体认证", "官方接口或服务商授权", "消息、订单、售后接口权限确认"],
-      nextAction: "先选一个真实试点店铺，不同时铺开多个平台。"
+      id: "wechat-miniapp",
+      name: "微信小程序",
+      summary: "适合小程序咨询入口，需要明确消息能力和主动发送边界。",
+      prerequisites: ["小程序 AppID 和主体", "AppSecret、Token、EncodingAESKey", "咨询入口和测试用户"],
+      nextAction: "公众号骨架完成后再推进小程序咨询入口。"
     }
   ];
 

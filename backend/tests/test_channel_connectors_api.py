@@ -190,6 +190,65 @@ def test_channel_connector_config_and_noop_send_plan_never_external_writes(clien
     assert "channel_connector.send_plan_created" in actions
 
 
+def test_ai_service_status_and_connector_secrets_never_return_plaintext(client, monkeypatch, tmp_path) -> None:
+    tenant, token = _bootstrap_owner(
+        client,
+        slug="connector-secret-status",
+        email="connector-secret-status@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    monkeypatch.delenv("BAILIAN_API_KEY", raising=False)
+    status_res = client.get(f"/api/tenants/{tenant['id']}/ai-service-status", headers=headers)
+    assert status_res.status_code == 200
+    status_body = status_res.json()
+    assert status_body["status"] == "not_configured"
+    assert status_body["secret_included"] is False
+    assert "key" not in str(status_body).lower()
+
+    monkeypatch.setenv("BAILIAN_API_KEY", "test-only-placeholder")
+    ready_res = client.get(f"/api/tenants/{tenant['id']}/ai-service-status", headers=headers)
+    assert ready_res.status_code == 200
+    ready_body = ready_res.json()
+    assert ready_body["status"] == "ready"
+    assert ready_body["secret_included"] is False
+    assert "test-only-placeholder" not in str(ready_body)
+
+    monkeypatch.setattr(
+        "app.services.channel_secret_store._secret_store_path",
+        lambda: tmp_path / "local_channel_secrets.json",
+    )
+    channel, _ready = _ready_outbox_draft(client, tenant["id"], headers)
+    _create_connector(client, channel["id"], headers)
+    secret_res = client.post(
+        f"/api/channels/{channel['id']}/connector-secrets",
+        headers=headers,
+        json={
+            "secrets": {
+                "token": "token-should-not-return",
+                "encoding_aes_key": "aes-should-not-return",
+                "app_secret": "secret-should-not-return",
+            }
+        },
+    )
+    assert secret_res.status_code == 200
+    secret_body = secret_res.json()
+    assert secret_body["status"] == "configured"
+    assert secret_body["secret_included"] is False
+    assert secret_body["field_status"] == {
+        "app_secret": "configured",
+        "encoding_aes_key": "configured",
+        "token": "configured",
+    }
+    assert "should-not-return" not in str(secret_body)
+
+    verification_res = client.post(f"/api/channels/{channel['id']}/connector-verification", headers=headers)
+    assert verification_res.status_code == 200
+    verification = verification_res.json()
+    assert verification["status"] == "verified"
+    assert verification["external_write_enabled"] is False
+    assert verification["secret_included"] is False
+
+
 def test_public_website_widget_message_enters_conversation_inbox(client) -> None:
     tenant, token = _bootstrap_owner(
         client,
@@ -218,7 +277,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert widget["conversation_id"]
     assert widget["message_id"]
     assert widget["is_new_conversation"] is True
-    assert widget["conversation_status"] == "bot"
+    assert widget["conversation_status"] == "waiting_human"
 
     second_widget_res = client.post(
         "/api/public/website-widget/messages",
@@ -267,7 +326,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert poll_res.status_code == 200
     poll = poll_res.json()
     assert poll["conversation_id"] == widget["conversation_id"]
-    assert poll["conversation_status"] == "bot"
+    assert poll["conversation_status"] == "waiting_human"
     assert poll["messages"] == [
         {
             "id": reply["id"],
@@ -345,7 +404,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     continued = continue_res.json()
     assert continued["is_new_conversation"] is True
     assert continued["conversation_id"] != widget["conversation_id"]
-    assert continued["conversation_status"] == "bot"
+    assert continued["conversation_status"] == "waiting_human"
 
     continue_poll_res = client.get(
         "/api/public/website-widget/messages",
@@ -358,7 +417,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert continue_poll_res.status_code == 200
     continue_poll = continue_poll_res.json()
     assert continue_poll["conversation_id"] == continued["conversation_id"]
-    assert continue_poll["conversation_status"] == "bot"
+    assert continue_poll["conversation_status"] == "waiting_human"
     assert continue_poll["messages"][0]["sender_type"] == "agent"
     assert continue_poll["messages"][0]["content"] == "您好，已为您重新接入客服，请问还有什么可以帮您？"
 
@@ -386,6 +445,86 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     leave_message = leave_message_res.json()
     assert leave_message["is_new_conversation"] is True
     assert leave_message["conversation_id"] != continued["conversation_id"]
+
+
+def test_website_widget_auto_replies_only_after_published_knowledge_and_model_ready(client, monkeypatch) -> None:
+    tenant, token = _bootstrap_owner(
+        client,
+        slug="website-widget-ai-cycle",
+        email="website-widget-ai-cycle@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    import_res = client.post(
+        f"/api/tenants/{tenant['id']}/knowledge-imports",
+        headers=headers,
+        json={
+            "source_file_ref": "template://website-ai-cycle",
+            "rows": [
+                {
+                    "business_object": "餐饮门店 AI 客服接入",
+                    "question": "餐饮门店怎么接入 AI 客服",
+                    "answer": "餐饮门店可以先接入网站客服组件，再导入门店常见问题，负责人发布后启用 AI 接待。",
+                    "trigger_keywords": ["餐饮门店", "AI客服", "接入", "网站客服"],
+                    "channel_scope": "website",
+                    "risk_level": "normal",
+                    "status": "active",
+                }
+            ],
+        },
+    )
+    assert import_res.status_code == 201
+    import_batch = import_res.json()
+    publish_res = client.post(
+        f"/api/tenants/{tenant['id']}/knowledge-publications",
+        headers=headers,
+        json={"import_batch_id": import_batch["id"], "note": "发布网站 AI 自动回复资料"},
+    )
+    assert publish_res.status_code == 201
+
+    monkeypatch.setenv("BAILIAN_API_KEY", "test-only-placeholder")
+
+    def _fake_generate_reply_draft(request):
+        return ModelDraftResult(
+            provider="bailian",
+            model="qwen-plus",
+            status="succeeded",
+            draft_text="餐饮门店可以先接入网站客服组件，再导入常见问题，负责人发布后启用 AI 接待。",
+            prompt_summary="test",
+            prompt_chars=120,
+            completion_chars=40,
+            total_chars=160,
+        )
+
+    monkeypatch.setattr("app.services.ai_reply_cycle.generate_reply_draft", _fake_generate_reply_draft)
+    widget_res = client.post(
+        "/api/public/website-widget/messages",
+        json={
+            "tenant_id": tenant["id"],
+            "component_id": "website-widget",
+            "visitor_id": "visitor-ai-cycle-001",
+            "visitor_name": "官网访客",
+            "text": "餐饮门店怎么接入 AI 客服？",
+            "page_url": "https://example.com/",
+            "page_title": "餐饮行业 AI 转型专家",
+        },
+    )
+
+    assert widget_res.status_code == 201
+    widget = widget_res.json()
+    assert widget["conversation_status"] == "bot"
+    poll_res = client.get(
+        "/api/public/website-widget/messages",
+        params={
+            "tenant_id": tenant["id"],
+            "visitor_id": "visitor-ai-cycle-001",
+            "after_id": widget["message_id"],
+        },
+    )
+    assert poll_res.status_code == 200
+    messages = poll_res.json()["messages"]
+    assert len(messages) == 1
+    assert messages[0]["sender_type"] == "ai"
+    assert "负责人发布后启用 AI 接待" in messages[0]["content"]
 
 
 def test_public_website_widget_script_is_hosted(client) -> None:
@@ -601,3 +740,4 @@ def test_channel_connector_config_is_tenant_isolated(client) -> None:
         },
     )
     assert receipt_res.status_code == 404
+from app.services.model_gateway import ModelDraftResult

@@ -11,6 +11,9 @@ from app.schemas.channel_connectors import (
     ChannelAccountRead,
     ChannelConnectorConfigCreate,
     ChannelConnectorConfigRead,
+    ChannelConnectorSecretStatusRead,
+    ChannelConnectorSecretUpsert,
+    ChannelConnectorVerificationRead,
     ChannelDeliveryReceiptCreate,
     ChannelDeliveryReceiptRead,
     ChannelProviderRead,
@@ -37,6 +40,9 @@ from app.services.channel_connectors import (
     receive_channel_webhook_event,
     receive_website_widget_message,
     receive_wecom_official_xml_webhook,
+    delete_channel_connector_secrets,
+    upsert_channel_connector_secrets,
+    verify_channel_connector_configuration,
     verify_wecom_callback_url,
 )
 
@@ -102,6 +108,34 @@ def get_tenant_channel_connector(
     db: Session = Depends(get_db),
 ) -> ChannelConnector:
     return get_channel_connector(db, channel_id=channel_id, principal=principal)
+
+
+@router.post("/channels/{channel_id}/connector-secrets", response_model=ChannelConnectorSecretStatusRead)
+def upsert_tenant_channel_connector_secrets(
+    channel_id: int,
+    payload: ChannelConnectorSecretUpsert,
+    principal: CurrentPrincipal = Depends(require_permission(CHANNEL_CONNECTOR_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> dict:
+    return upsert_channel_connector_secrets(db, channel_id=channel_id, payload=payload, principal=principal)
+
+
+@router.delete("/channels/{channel_id}/connector-secrets", response_model=ChannelConnectorSecretStatusRead)
+def delete_tenant_channel_connector_secrets(
+    channel_id: int,
+    principal: CurrentPrincipal = Depends(require_permission(CHANNEL_CONNECTOR_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> dict:
+    return delete_channel_connector_secrets(db, channel_id=channel_id, principal=principal)
+
+
+@router.post("/channels/{channel_id}/connector-verification", response_model=ChannelConnectorVerificationRead)
+def verify_tenant_channel_connector_configuration(
+    channel_id: int,
+    principal: CurrentPrincipal = Depends(require_permission(CHANNEL_CONNECTOR_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> dict:
+    return verify_channel_connector_configuration(db, channel_id=channel_id, principal=principal)
 
 
 @router.post(

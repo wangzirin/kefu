@@ -1747,6 +1747,110 @@ export interface ReplyDecisionList {
   total: number;
 }
 
+export interface AiServiceStatus {
+  tenant_id: number;
+  status: "ready" | "not_configured" | "error" | string;
+  label: string;
+  default_provider: string;
+  default_model: string;
+  configured: boolean;
+  fallback_available: boolean;
+  customer_visible_detail: string;
+  generated_at: string;
+  secret_included: boolean;
+}
+
+export interface KnowledgeImportTemplateRow {
+  business_object: string;
+  question: string;
+  answer: string;
+  trigger_keywords?: string[] | string;
+  channel_scope?: string;
+  risk_level?: "normal" | "review" | "blocked" | "low" | "medium" | "high" | "critical";
+  forbidden_commitments?: string[] | string;
+  handoff_rule?: string;
+  source_note?: string;
+  status?: "draft" | "active" | "archived";
+}
+
+export interface KnowledgeImportPrecheck {
+  tenant_id: number;
+  status: string;
+  can_import: boolean;
+  row_count: number;
+  valid_count: number;
+  error_count: number;
+  warning_count: number;
+  valid_rows: Array<Record<string, unknown>>;
+  errors: Array<Record<string, unknown>>;
+  warnings: Array<Record<string, unknown>>;
+  required_fields: string[];
+  provider_call_performed: boolean;
+  external_write_performed: boolean;
+}
+
+export interface KnowledgeImportBatch {
+  id: number;
+  tenant_id: number;
+  source_file_ref: string;
+  object_type: string;
+  row_count: number;
+  valid_count: number;
+  error_count: number;
+  status: string;
+  result_payload: Record<string, unknown>;
+  created_by_id: number | null;
+  created_at: string | null;
+}
+
+export interface KnowledgeImportSampleRun {
+  tenant_id: number;
+  import_batch_id: number;
+  status: string;
+  total_cases: number;
+  hit_cases: number;
+  low_confidence_cases: number;
+  blocked_cases: number;
+  can_publish: boolean;
+  case_results: Array<Record<string, unknown>>;
+  provider_call_performed: boolean;
+  external_write_performed: boolean;
+}
+
+export interface KnowledgePublication {
+  tenant_id: number;
+  import_batch_id: number;
+  status: string;
+  version: number;
+  created_business_object_ids: number[];
+  created_object_knowledge_card_ids: number[];
+  archived_object_knowledge_card_ids: number[];
+  message: string;
+  audit: Record<string, unknown>;
+}
+
+export interface ChannelConnectorSecretStatus {
+  tenant_id: number;
+  channel_id: number;
+  connector_id: number;
+  provider: string;
+  status: string;
+  field_status: Record<string, string>;
+  secret_included: boolean;
+}
+
+export interface ChannelConnectorVerification {
+  tenant_id: number;
+  channel_id: number;
+  connector_id: number;
+  provider: string;
+  status: string;
+  missing_fields: string[];
+  webhook_path: string;
+  external_write_enabled: boolean;
+  secret_included: boolean;
+}
+
 export interface KnowledgeVectorIndexRebuild {
   tenant_id: number;
   document_id: number | null;
@@ -3291,6 +3395,36 @@ export async function configureNoopChannelConnector(
   );
 }
 
+export async function configureChannelConnector(
+  channelId: number,
+  token: string,
+  payload: {
+    provider: string;
+    mode?: "noop" | "official_api";
+    status?: string;
+    display_name?: string;
+    capabilities?: string[];
+    public_config?: Record<string, unknown>;
+    webhook_path?: string;
+    signature_mode?: string;
+  }
+): Promise<ChannelConnectorConfig> {
+  return requestJson<ChannelConnectorConfig>(
+    `/api/channels/${channelId}/connector-config`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        mode: "noop",
+        status: "draft",
+        capabilities: [],
+        public_config: {},
+        ...payload
+      })
+    },
+    token
+  );
+}
+
 export async function ensureNoopChannelConnector(channelId: number, token: string): Promise<ChannelConnectorConfig> {
   return configureNoopChannelConnector(channelId, token);
 }
@@ -3509,6 +3643,137 @@ export async function listConversationInbox(
     search.set("channel_id", String(params.channel_id));
   }
   return requestJson<ConversationInboxList>(`/api/tenants/${tenantId}/conversation-inbox?${search.toString()}`, {}, token);
+}
+
+export async function getAiServiceStatus(tenantId: string | number, token: string): Promise<AiServiceStatus> {
+  return requestJson<AiServiceStatus>(`/api/tenants/${tenantId}/ai-service-status`, {}, token);
+}
+
+export async function precheckKnowledgeImport(
+  tenantId: string | number,
+  token: string,
+  payload: { source_file_ref?: string; rows: KnowledgeImportTemplateRow[] }
+): Promise<KnowledgeImportPrecheck> {
+  return requestJson<KnowledgeImportPrecheck>(
+    `/api/tenants/${tenantId}/knowledge-imports/precheck`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token
+  );
+}
+
+export async function createKnowledgeImport(
+  tenantId: string | number,
+  token: string,
+  payload: { source_file_ref?: string; rows: KnowledgeImportTemplateRow[] }
+): Promise<KnowledgeImportBatch> {
+  return requestJson<KnowledgeImportBatch>(
+    `/api/tenants/${tenantId}/knowledge-imports`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token
+  );
+}
+
+export async function runKnowledgeImportSample(
+  tenantId: string | number,
+  importId: number,
+  token: string
+): Promise<KnowledgeImportSampleRun> {
+  return requestJson<KnowledgeImportSampleRun>(
+    `/api/tenants/${tenantId}/knowledge-imports/${importId}/sample-run`,
+    { method: "POST" },
+    token
+  );
+}
+
+export async function publishKnowledgeImport(
+  tenantId: string | number,
+  token: string,
+  payload: { import_batch_id: number; note?: string }
+): Promise<KnowledgePublication> {
+  return requestJson<KnowledgePublication>(
+    `/api/tenants/${tenantId}/knowledge-publications`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token
+  );
+}
+
+export async function rollbackKnowledgePublication(
+  tenantId: string | number,
+  versionId: number,
+  token: string,
+  payload: { reason?: string } = {}
+): Promise<Record<string, unknown>> {
+  return requestJson<Record<string, unknown>>(
+    `/api/tenants/${tenantId}/knowledge-publications/${versionId}/rollback`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token
+  );
+}
+
+export async function upsertChannelConnectorSecrets(
+  channelId: number,
+  token: string,
+  payload: { secrets: Record<string, string> }
+): Promise<ChannelConnectorSecretStatus> {
+  return requestJson<ChannelConnectorSecretStatus>(
+    `/api/channels/${channelId}/connector-secrets`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token
+  );
+}
+
+export async function deleteChannelConnectorSecrets(
+  channelId: number,
+  token: string
+): Promise<ChannelConnectorSecretStatus> {
+  return requestJson<ChannelConnectorSecretStatus>(
+    `/api/channels/${channelId}/connector-secrets`,
+    { method: "DELETE" },
+    token
+  );
+}
+
+export async function verifyChannelConnector(
+  channelId: number,
+  token: string
+): Promise<ChannelConnectorVerification> {
+  return requestJson<ChannelConnectorVerification>(
+    `/api/channels/${channelId}/connector-verification`,
+    { method: "POST" },
+    token
+  );
+}
+
+export async function createInboundMessageCycle(
+  conversationId: number,
+  token: string,
+  payload: { content: string; sender_type?: string; external_message_id?: string }
+): Promise<Record<string, unknown>> {
+  return requestJson<Record<string, unknown>>(
+    `/api/conversations/${conversationId}/inbound-message-cycle`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        direction: "inbound",
+        sender_type: payload.sender_type ?? "customer",
+        content: payload.content,
+        external_message_id: payload.external_message_id ?? ""
+      })
+    },
+    token
+  );
+}
+
+export async function createAgentReply(
+  conversationId: number,
+  token: string,
+  payload: { content: string; close_conversation?: boolean; idempotency_key?: string }
+): Promise<MessageRead> {
+  return requestJson<MessageRead>(
+    `/api/conversations/${conversationId}/agent-replies`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token
+  );
 }
 
 export async function updateConversationAssignment(

@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.models.foundation import utc_now
 from app.schemas.conversation_inbox import (
+    AgentReplyCreate,
     ConversationAssignmentUpdate,
     ConversationInboxItemRead,
     ConversationInboxList,
@@ -417,3 +418,49 @@ def apply_conversation_workflow_action(
     db.commit()
     db.refresh(conversation)
     return conversation
+
+
+def create_agent_reply(
+    db: Session,
+    conversation_id: int,
+    payload: AgentReplyCreate,
+    principal: CurrentPrincipal,
+) -> Message:
+    conversation = db.get(Conversation, conversation_id)
+    if conversation is None or conversation.tenant_id != principal.tenant.id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    if conversation.status == "resolved" and not payload.close_conversation:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conversation already resolved")
+    now = utc_now()
+    if conversation.assigned_user_id is None:
+        conversation.assigned_user_id = principal.user.id
+    conversation.status = "resolved" if payload.close_conversation else "handoff"
+    message = Message(
+        conversation_id=conversation.id,
+        direction="outbound",
+        sender_type="agent",
+        content=payload.content.strip(),
+        external_message_id=payload.idempotency_key.strip() or f"agent-reply-{conversation.id}-{int(now.timestamp() * 1000)}",
+        created_at=now,
+    )
+    conversation.last_message_at = now
+    db.add(message)
+    db.flush()
+    db.add(
+        ConversationEvent(
+            conversation_id=conversation.id,
+            event_type="message.agent_reply",
+            actor_id=principal.user.id,
+            payload=json.dumps(
+                {
+                    "message_id": message.id,
+                    "close_conversation": payload.close_conversation,
+                    "external_write": conversation.status == "handoff",
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(message)
+    return message

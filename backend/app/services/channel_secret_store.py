@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
+import hashlib
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 from app.services.channel_provider_registry import normalize_provider
@@ -64,6 +68,91 @@ def _env_first(*keys: str) -> str:
     return ""
 
 
+def _secret_store_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "data" / "local_channel_secrets.json"
+
+
+def _local_secret_key() -> bytes:
+    seed = os.getenv("STANDARD_OPS_LOCAL_SECRET_KEY", "") or os.getenv("ADMIN_BOOTSTRAP_PASSWORD", "") or "wanfa-standard-ops-local-secret"
+    return hashlib.sha256(seed.encode("utf-8")).digest()
+
+
+def _xor_bytes(data: bytes, key: bytes) -> bytes:
+    return bytes(byte ^ key[index % len(key)] for index, byte in enumerate(data))
+
+
+def _encrypt_secret(value: str) -> str:
+    raw = value.encode("utf-8")
+    return base64.urlsafe_b64encode(_xor_bytes(raw, _local_secret_key())).decode("ascii")
+
+
+def _decrypt_secret(value: str) -> str:
+    raw = base64.urlsafe_b64decode(value.encode("ascii"))
+    return _xor_bytes(raw, _local_secret_key()).decode("utf-8")
+
+
+def _read_local_secret_store() -> dict[str, Any]:
+    path = _secret_store_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_local_secret_store(payload: dict[str, Any]) -> None:
+    path = _secret_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def save_local_connector_secrets(*, credential_ref: str, secrets: dict[str, str]) -> dict[str, str]:
+    store = _read_local_secret_store()
+    clean = {key: value for key, value in secrets.items() if str(value).strip()}
+    store[credential_ref] = {key: _encrypt_secret(str(value).strip()) for key, value in clean.items()}
+    _write_local_secret_store(store)
+    return {key: "configured" for key in clean}
+
+
+def clear_local_connector_secrets(*, credential_ref: str) -> None:
+    store = _read_local_secret_store()
+    if credential_ref in store:
+        del store[credential_ref]
+        _write_local_secret_store(store)
+
+
+def _resolve_local_secret_material(*, provider: str, credential_ref: str) -> WebhookSecretResolution:
+    encrypted = _read_local_secret_store().get(credential_ref)
+    if not isinstance(encrypted, dict):
+        return WebhookSecretResolution(status="reference_unresolved", detail="local credential_ref is missing")
+    try:
+        secrets = {key: _decrypt_secret(str(value)) for key, value in encrypted.items()}
+    except Exception:
+        return WebhookSecretResolution(status="invalid", detail="local credential_ref cannot be decrypted")
+    normalized_provider = normalize_provider(provider)
+    material = WebhookSecretMaterial(
+        provider=normalized_provider,
+        credential_ref=credential_ref,
+        token=secrets.get("token", "") or secrets.get("callback_token", ""),
+        encoding_aes_key=secrets.get("encoding_aes_key", "") or secrets.get("encodingAESKey", ""),
+        webhook_signing_secret=secrets.get("webhook_signing_secret", "") or secrets.get("signing_secret", ""),
+        receiver_id=secrets.get("receiver_id", "") or secrets.get("corp_id", "") or secrets.get("app_id", ""),
+        source="local_encrypted",
+    )
+    missing_fields: list[str] = []
+    if normalized_provider in {"wecom", "wechat_official_account", "wechat_kf", "wechat_miniapp"}:
+        if not material.token:
+            missing_fields.append("token")
+        if normalized_provider != "wechat_miniapp" and not material.encoding_aes_key:
+            missing_fields.append("encoding_aes_key")
+    elif normalized_provider == "website" and not material.webhook_signing_secret:
+        missing_fields.append("webhook_signing_secret")
+    if missing_fields:
+        return WebhookSecretResolution(status="local_missing_fields", material=material, detail="missing fields: " + ",".join(missing_fields))
+    return WebhookSecretResolution(status="local_configured", material=material)
+
+
 def _resolve_env_secret_material(*, provider: str, credential_ref: str) -> WebhookSecretResolution:
     prefix = credential_ref.removeprefix("env:").strip().upper()
     if not prefix:
@@ -123,6 +212,8 @@ def resolve_webhook_secret_material(
         )
     if credential_ref.startswith("env:"):
         return _resolve_env_secret_material(provider=provider, credential_ref=credential_ref)
+    if credential_ref.startswith("local:"):
+        return _resolve_local_secret_material(provider=provider, credential_ref=credential_ref)
     material = _WEBHOOK_SECRET_FIXTURES.get(credential_ref)
     if material is None:
         return WebhookSecretResolution(
