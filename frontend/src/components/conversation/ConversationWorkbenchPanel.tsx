@@ -1,4 +1,12 @@
-import { MessageSquare, RefreshCw, Search, Send } from "lucide-react";
+import {
+  Bot,
+  MessageSquare,
+  Power,
+  RefreshCw,
+  Search,
+  Send,
+  UserRound,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -53,6 +61,14 @@ export interface ChannelIdentitySummary {
   lastSyncLabel: string;
 }
 
+export interface WorkbenchColleague {
+  id: number;
+  name: string;
+  role: string;
+  status: string;
+  activeChats: number;
+}
+
 export interface ConversationWorkbenchPanelProps {
   state: ConversationInboxState;
   reviewItems: HumanReviewInboxItem[];
@@ -76,6 +92,7 @@ export interface ConversationWorkbenchPanelProps {
   canApproveReviewDraft: boolean;
   canConfirmOutboxDraft: boolean;
   channelIdentities?: Record<number, ChannelIdentitySummary>;
+  colleagues?: WorkbenchColleague[];
   targetQueue?: string;
   targetChannelId?: number | null;
   onRefresh: () => void;
@@ -106,6 +123,7 @@ export function ConversationWorkbenchPanel({
   canApproveReviewDraft,
   canConfirmOutboxDraft,
   channelIdentities = {},
+  colleagues = [],
   targetQueue,
   targetChannelId = null,
   onRefresh,
@@ -119,6 +137,9 @@ export function ConversationWorkbenchPanel({
   const [activeQueue, setActiveQueue] = useState<WorkbenchQueueKey>("all");
   const [editableDraft, setEditableDraft] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
+  const [quickReplyTab, setQuickReplyTab] = useState<"personal" | "customer" | "custom">("personal");
+  const [isTransferOpen, setIsTransferOpen] = useState(false);
+  const [workflowNotice, setWorkflowNotice] = useState("");
   const validTargetQueue = normalizeWorkbenchQueueKey(targetQueue);
 
   const conversations = state.data.items;
@@ -277,6 +298,8 @@ export function ConversationWorkbenchPanel({
 
   useEffect(() => {
     setEditableDraft(draftText);
+    setWorkflowNotice("");
+    setIsTransferOpen(false);
   }, [selectedConversation?.id, relatedReview?.id, latestDraft?.id, draftText]);
 
   useEffect(() => {
@@ -380,6 +403,66 @@ export function ConversationWorkbenchPanel({
     : conversationDetailStatus === "loading"
       ? conversationDetailMessage
       : "仅本地记录，未发送到外部平台。";
+  const visitorLink = `https://kf-preview.local/conversation/${selectedConversation.id}`;
+  const quickReplyTemplates = {
+    personal: [
+      {
+        title: "问候",
+        items: [
+          "您好，请问有什么可以帮您？",
+          "请您稍等，我正在帮您核对。",
+          "不要着急，我们正在处理，一会答复您。"
+        ]
+      },
+      {
+        title: "致歉",
+        items: [
+          "抱歉让您久等了，我马上为您处理。",
+          "这个问题我需要确认一下，再给您准确答复。"
+        ]
+      },
+      {
+        title: "追踪",
+        items: [
+          "方便留一下联系方式吗？我们后续跟进。",
+          "我先记录您的需求，稍后同步处理进度。"
+        ]
+      }
+    ],
+    customer: [
+      {
+        title: "客户信息",
+        items: [
+          `客户：${selectedConversation.contact_display_name || selectedConversation.subject}`,
+          `来源：${selectedChannelLabel}`,
+          `最近消息：${selectedConversation.last_message_preview || "暂无"}`
+        ]
+      }
+    ],
+    custom: [
+      {
+        title: "自定义",
+        items: [
+          "产品能力需要结合您的业务场景确认。",
+          "报价和套餐以正式方案为准。",
+          "隐私、合同、发票问题我会转交专人确认。"
+        ]
+      }
+    ]
+  };
+  const selectedQuickReplyGroups = quickReplyTemplates[quickReplyTab];
+  const insertQuickReply = (text: string) => {
+    setEditableDraft((current) => (current.trim() ? `${current.trim()}\n${text}` : text));
+  };
+  const handleEndConversation = () => {
+    setWorkflowNotice("已标记结束对话。预览模式不会关闭真实渠道会话。");
+    onWorkflowAction(selectedConversation, "resolve", "坐席结束当前对话");
+  };
+  const handleTransferConversation = (colleague: WorkbenchColleague) => {
+    setWorkflowNotice(`已发起转接给 ${colleague.name}。预览模式只更新本地提示。`);
+    setIsTransferOpen(false);
+    onWorkflowAction(selectedConversation, "transfer", `坐席申请转接给 ${colleague.name}`);
+  };
 
   return (
     <section className="conversation-workbench service-desk wechat-service-desk" id="workspace-live" aria-label="多渠道对话台">
@@ -446,100 +529,154 @@ export function ConversationWorkbenchPanel({
             </div>
           </aside>
 
-          <article className="chat-pane chat-pane-v2 service-chat-pane wechat-chat-pane" aria-label="当前会话对话框">
-            <div
-              className="chat-pane-head service-chat-head"
-              data-wechat-first-workbench="p3-06u-26b"
-              data-autonomous-reply-workbench="p3-06u-26g2"
-            >
-              <div>
-                <h3>{selectedConversation.contact_display_name || selectedConversation.subject}</h3>
-                <p>{selectedChannelLabel} · {selectedStoreLabel}</p>
-              </div>
-              <div className="service-chat-readonly-status" aria-label="会话能力状态" data-function-reality="no-fake-chat-actions">
-                <strong>本地记录模式</strong>
-                <span>回复只写入本地会话，不发送到外部平台</span>
-              </div>
-            </div>
-
-            <div className="timeline-stream service-message-stream" aria-label="会话事件时间线">
-              {timeline.map((event) => (
-                <article key={event.id} className={`timeline-event timeline-${event.kind} service-message service-message-${event.kind}`}>
-                  <span className="timeline-marker" aria-hidden="true" />
-                  <div>
-                    <header>
-                      <strong>{event.title}</strong>
-                      <span>{event.meta}</span>
-                    </header>
-                    <p>{event.text}</p>
-                    {event.href ? <a className="timeline-link" href={event.href}>查看关联记录</a> : null}
-                  </div>
-                </article>
-              ))}
-            </div>
-
-            {suggestedReply ? (
-              <div className="service-ai-suggestion-card" aria-label="AI 建议回复">
-                <div>
-                  <strong>AI 建议回复</strong>
-                  <small>建议不会自动发送，可填入后人工调整。</small>
+          <article className="miduoke-chat-frame" aria-label="当前会话对话框">
+            <section className="miduoke-chat-main">
+              <header className="miduoke-chat-header">
+                <div className="miduoke-chat-title">
+                  <strong>{selectedConversation.contact_display_name || selectedConversation.subject}</strong>
+                  <span>{selectedChannelLabel} · {selectedStoreLabel}</span>
                 </div>
-                <p>{suggestedReply}</p>
-                <button type="button" className="secondary-action" onClick={() => setEditableDraft(suggestedReply)}>
-                  填入输入框
-                </button>
-              </div>
-            ) : null}
+                <div className="miduoke-chat-actions" aria-label="会话工具">
+                  <span className="miduoke-transfer-anchor">
+                    <button type="button" title="转接同事" onClick={() => setIsTransferOpen((current) => !current)}>
+                      <UserRound size={18} />
+                    </button>
+                    {isTransferOpen ? (
+                      <div className="miduoke-transfer-menu" role="menu" aria-label="转接给同事">
+                        {colleagues.map((colleague) => (
+                          <button
+                            type="button"
+                            key={colleague.id}
+                            role="menuitem"
+                            disabled={colleague.status === "offline"}
+                            onClick={() => handleTransferConversation(colleague)}
+                          >
+                            <i className={`colleague-status-dot is-${colleague.status}`} aria-hidden="true" />
+                            <span>
+                              <strong>{colleague.name}</strong>
+                              <small>{formatColleagueStatus(colleague.status)} · {colleague.activeChats} 个会话</small>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </span>
+                  <button type="button" title="结束对话" onClick={handleEndConversation}>
+                    <Power size={18} />
+                  </button>
+                </div>
+              </header>
 
-            <div
-              className="draft-composer-panel service-reply-dock service-chat-composer"
-              aria-label="坐席回复区"
-              data-chat-ui-slimmed="p3-06u-26h2w"
-              data-service-decision-center="p3-06u-26b"
-            >
-              <label className="service-chat-input-field">
-                <span className="sr-only">回复内容</span>
+              <div className="miduoke-visitor-strip">
+                <span>正在访问</span>
+                <a href={visitorLink}>{visitorLink}</a>
+                <strong>IP：本地预览</strong>
+              </div>
+
+              <div className="miduoke-message-stream" aria-label="会话消息">
+                {timeline.map((event) => (
+                  <article key={event.id} className={`miduoke-message is-${event.kind}`}>
+                    {event.kind === "system" ? (
+                      <div className="miduoke-system-pill">
+                        <span>{event.meta}</span>
+                        <strong>{event.text}</strong>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="miduoke-message-avatar" aria-hidden="true">
+                          {event.kind === "customer" ? <UserRound size={18} /> : <Bot size={18} />}
+                        </span>
+                        <div className="miduoke-message-body">
+                          <header>
+                            <strong>{event.title}</strong>
+                            <span>{event.meta}</span>
+                          </header>
+                          <p>{event.text}</p>
+                        </div>
+                      </>
+                    )}
+                  </article>
+                ))}
+              </div>
+
+              <footer className="miduoke-composer">
                 <textarea
                   value={replyTextValue}
                   onChange={(event) => setEditableDraft(event.target.value)}
-                  rows={4}
-                  aria-label="输入回复内容"
-                  placeholder={replyPlaceholder}
+                  aria-label="输入消息内容"
+                  placeholder="请输入消息内容..."
                 />
-              </label>
-              <div className="service-composer-footer">
-                <small className={`disabled-reason ${localReplyState.status === "error" && localReplyIsForSelected ? "is-error" : ""}`}>
-                  {sendDisabledReason || localReplyNotice}
-                </small>
-                <div className="service-composer-actions">
-                  {relatedReview ? (
+                <div className="miduoke-composer-foot">
+                  <small className={localReplyState.status === "error" && localReplyIsForSelected ? "is-error" : ""}>
+                    {workflowNotice || sendDisabledReason || localReplyNotice}
+                  </small>
+                  <div>
+                    {relatedReview ? (
+                      <button
+                        type="button"
+                        className="miduoke-secondary-send"
+                        disabled={!canSaveManualDraft}
+                        onClick={() => onApproveReviewDraft(relatedReview, editableDraft, "保存人工草稿，未发送到外部平台。")}
+                      >
+                        保存草稿
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      className="secondary-action"
-                      disabled={!canSaveManualDraft}
-                      title={canSaveManualDraft ? "保存为人工草稿，不发送到外部平台" : sendDisabledReason || "当前不能保存人工草稿"}
-                      onClick={() => {
-                        if (relatedReview) {
-                          onApproveReviewDraft(relatedReview, editableDraft, "保存人工草稿，未发送到外部平台。");
-                        }
-                      }}
+                      className="miduoke-send"
+                      disabled={!canSendLocalReply}
+                      onClick={() => onSendLocalReply(selectedConversation, editableDraft)}
                     >
-                      保存人工草稿
+                      {isSendingLocalReply ? "写入中" : "发送"}
+                      <Send size={16} />
                     </button>
-                  ) : null}
+                  </div>
+                </div>
+              </footer>
+            </section>
+
+            <aside className="miduoke-quick-panel" aria-label="快捷回复">
+              <div className="miduoke-quick-tabs">
                 <button
                   type="button"
-                  className="composer-send-button"
-                  disabled={!canSendLocalReply}
-                  title={canSendLocalReply ? "写入本地会话，不发送到外部平台" : sendDisabledReason}
-                  onClick={() => onSendLocalReply(selectedConversation, editableDraft)}
+                  className={quickReplyTab === "personal" ? "active" : ""}
+                  onClick={() => setQuickReplyTab("personal")}
                 >
-                  <Send size={17} />
-                  {isSendingLocalReply ? "写入中" : "发送到本地会话"}
+                  快捷回复
                 </button>
-                </div>
+                <button
+                  type="button"
+                  className={quickReplyTab === "customer" ? "active" : ""}
+                  onClick={() => setQuickReplyTab("customer")}
+                >
+                  客户信息
+                </button>
+                <button
+                  type="button"
+                  className={quickReplyTab === "custom" ? "active" : ""}
+                  onClick={() => setQuickReplyTab("custom")}
+                >
+                  自定义
+                </button>
               </div>
-            </div>
+              <label className="miduoke-quick-search">
+                <Search size={15} />
+                <input placeholder="搜索" />
+              </label>
+              <div className="miduoke-quick-list">
+                {selectedQuickReplyGroups.map((group) => (
+                  <section key={group.title}>
+                    <strong>{group.title}</strong>
+                    {group.items.map((item) => (
+                      <button type="button" key={item} onClick={() => insertQuickReply(item)}>
+                        <span>丁</span>
+                        {item}
+                      </button>
+                    ))}
+                  </section>
+                ))}
+              </div>
+            </aside>
           </article>
         </div>
       </div>
@@ -667,6 +804,15 @@ function formatDateTime(value: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function formatColleagueStatus(value: string) {
+  const labels: Record<string, string> = {
+    online: "在线",
+    busy: "忙碌",
+    offline: "离线"
+  };
+  return labels[value] ?? value;
 }
 
 function normalizeChannelClass(value: string) {

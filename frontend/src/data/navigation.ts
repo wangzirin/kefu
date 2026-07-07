@@ -14,6 +14,7 @@ export interface NavigationGroup {
   href: string;
   count: string;
   description: string;
+  icon: string;
   items: NavigationItem[];
   visibleTo?: NavigationRole[];
 }
@@ -29,84 +30,104 @@ export interface RoleTaskPath {
 
 export const navigationGroups: NavigationGroup[] = [
   {
-    label: "总览",
-    href: "#overview",
-    count: "今日",
-    description: "经营信号",
-    visibleTo: ["owner", "admin", "agent", "viewer"],
-    items: [{ label: "运营总览", href: "#overview", count: "指挥舱", active: false }]
-  },
-  {
-    label: "本地试运行准备",
-    href: "#pilot",
-    count: "试运行",
-    description: "资料、复测、交付",
-    visibleTo: ["owner", "admin", "viewer"],
-    items: [{ label: "本地试运行准备", href: "#pilot", count: "主流程", active: false }]
-  },
-  {
-    label: "工作台",
+    label: "对话",
     href: "#live",
     count: "坐席",
-    description: "自动接待与转人工",
+    description: "当前接待、人工审核和待发送",
+    icon: "message",
     visibleTo: ["owner", "admin", "agent"],
     items: [
-      { label: "接待工作台", href: "#live", count: "主界面", active: false },
-      { label: "会话收件箱", href: "#conversations", count: "后台", active: false, hiddenFromSidebar: true },
-      { label: "人工审核", href: "#reviews", count: "后台", active: false, hiddenFromSidebar: true },
-      { label: "待发送草稿", href: "#outbox", count: "后台", active: false, hiddenFromSidebar: true },
-      { label: "工单/SLA", href: "#tickets", count: "后台", active: false, hiddenFromSidebar: true }
+      { label: "当前对话", href: "#live", count: "接待", active: false },
+      { label: "我的会话", href: "#conversations", count: "收件箱", active: false, hiddenFromSidebar: true },
+      { label: "人工审核", href: "#reviews", count: "审核", active: false, hiddenFromSidebar: true },
+      { label: "待发送草稿", href: "#outbox", count: "草稿", active: false, hiddenFromSidebar: true }
     ]
   },
   {
-    label: "客户",
+    label: "客户管理",
     href: "#contacts",
-    count: "画像",
-    description: "联系人和线索",
+    count: "客户",
+    description: "联系人画像和商机线索",
+    icon: "customers",
     visibleTo: ["owner", "admin", "agent"],
     items: [
-      { label: "联系人中心", href: "#contacts", count: "画像", active: false },
-      { label: "线索跟进", href: "#leads", count: "转化", active: false }
+      { label: "客户资料", href: "#contacts", count: "画像", active: false },
+      { label: "线索跟进", href: "#leads", count: "线索", active: false }
     ]
   },
   {
-    label: "知识运营",
+    label: "工单管理",
+    href: "#tickets",
+    count: "工单",
+    description: "超时、升级和售后处理",
+    icon: "tickets",
+    visibleTo: ["owner", "admin", "agent"],
+    items: [{ label: "工单/SLA", href: "#tickets", count: "处理", active: false }]
+  },
+  {
+    label: "统计报表",
+    href: "#overview",
+    count: "报表",
+    description: "运营总览、质量复盘和交付报告",
+    icon: "report",
+    visibleTo: ["owner", "admin", "agent", "viewer"],
+    items: [
+      { label: "运营总览", href: "#overview", count: "总览", active: false },
+      { label: "质量复盘", href: "#quality", count: "质量", active: false }
+    ]
+  },
+  {
+    label: "机器人",
     href: "#knowledge",
     count: "知识",
-    description: "文档、缺口、评测",
+    description: "知识库、缺口、评测和自动回复策略",
+    icon: "bot",
     visibleTo: ["owner", "admin", "agent"],
     items: [
-      { label: "知识库运营", href: "#knowledge", count: "文档", active: false },
+      { label: "知识库", href: "#knowledge", count: "文档", active: false },
       { label: "知识缺口", href: "#gaps", count: "修复", active: false, visibleTo: ["owner", "admin"] },
-      { label: "知识评测", href: "#evals", count: "回归", active: false, visibleTo: ["owner", "admin"] }
+      { label: "知识评测", href: "#evals", count: "评测", active: false, visibleTo: ["owner", "admin"] },
+      { label: "自动回复策略", href: "#model", count: "策略", active: false, visibleTo: ["owner", "admin"] }
     ]
   },
   {
-    label: "质量复盘",
-    href: "#quality",
-    count: "错因",
-    description: "错因与修复",
-    visibleTo: ["owner", "admin", "viewer"],
-    items: [{ label: "质量诊断", href: "#quality", count: "复盘", active: false }]
-  },
-  {
-    label: "渠道接入",
+    label: "企微助手",
     href: "#channels",
-    count: "接入",
-    description: "入口、验证和健康",
+    count: "企微",
+    description: "渠道账号、官方接入和回调验证",
+    icon: "wecom",
     visibleTo: ["owner", "admin", "viewer"],
-    items: [{ label: "渠道状态", href: "#channels", count: "步骤", active: false }]
+    items: [{ label: "渠道接入", href: "#channels", count: "状态", active: false }]
   },
   {
-    label: "管理运维",
+    label: "线索表单",
+    href: "#pilot",
+    count: "表单",
+    description: "资料导入、预检和交付准备",
+    icon: "form",
+    visibleTo: ["owner", "admin", "viewer"],
+    items: [{ label: "本地试运行准备", href: "#pilot", count: "资料", active: false }]
+  },
+  {
+    label: "消息中心",
     href: "#ops",
-    count: "运维",
-    description: "告警、模型、账号",
+    count: "消息",
+    description: "告警、任务和运维通知",
+    icon: "notice",
+    visibleTo: ["owner", "admin"],
+    items: [{ label: "运维与告警", href: "#ops", count: "通知", active: false }]
+  },
+  {
+    label: "设置中心",
+    href: "#settings",
+    count: "设置",
+    description: "账号、本地维护、备份和更新",
+    icon: "settings",
     visibleTo: ["owner", "admin"],
     items: [
-      { label: "运维与告警", href: "#ops", count: "健康", active: false },
-      { label: "模型路由", href: "#model", count: "路由", active: false },
-      { label: "账号与本地维护", href: "#settings", count: "维护", active: false }
+      { label: "账号与本地维护", href: "#settings", count: "维护", active: false },
+      { label: "模型路由", href: "#model", count: "模型", active: false },
+      { label: "运维健康", href: "#ops", count: "健康", active: false }
     ]
   }
 ];
@@ -243,7 +264,7 @@ export function getRoleTaskPathsForRoles(roles: string[]) {
 }
 
 export function getDefaultNavigationHrefForRoles(roles: string[]) {
-  return "#overview";
+  return hasRole(roles, ["owner", "admin", "agent"]) ? "#live" : "#overview";
 }
 
 function canAccessNavigation(roles: string[], visibleTo?: NavigationRole[]) {

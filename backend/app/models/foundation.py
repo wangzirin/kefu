@@ -33,6 +33,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    avatar_data_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    public_profile: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    personal_settings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     tenant: Mapped[Tenant] = relationship(back_populates="users")

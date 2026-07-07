@@ -18,6 +18,7 @@ class CurrentPrincipal:
     user: User
     tenant: Tenant
     roles: list[str]
+    session: AuthSession | None = None
 
 
 def _as_aware(value: datetime) -> datetime:
@@ -32,19 +33,23 @@ def get_current_principal_optional(
 ) -> CurrentPrincipal | None:
     if credentials is None:
         return None
+    unauthorized = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="valid bearer token required",
+    )
     token_hash = hash_token(credentials.credentials)
     query = select(AuthSession).where(AuthSession.token_hash == token_hash)
     session = db.scalar(query)
     if session is None or session.revoked_at is not None:
-        return None
+        raise unauthorized
     if _as_aware(session.expires_at) <= datetime.now(timezone.utc):
-        return None
+        raise unauthorized
     user = db.get(User, session.user_id)
     if user is None or user.status != "active":
-        return None
+        raise unauthorized
     tenant = db.get(Tenant, user.tenant_id)
     if tenant is None or tenant.status != "active":
-        return None
+        raise unauthorized
     role_query = (
         select(Role.code)
         .join(UserRole, UserRole.role_id == Role.id)
@@ -52,7 +57,7 @@ def get_current_principal_optional(
         .order_by(Role.code)
     )
     roles = list(db.scalars(role_query).all())
-    return CurrentPrincipal(user=user, tenant=tenant, roles=roles)
+    return CurrentPrincipal(user=user, tenant=tenant, roles=roles, session=session)
 
 
 def require_current_principal(

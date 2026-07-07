@@ -16,11 +16,16 @@ from app.models import AuthSession, Role, Tenant, User, UserRole
 from app.models.foundation import utc_now
 from app.schemas.auth import (
     CurrentUser,
+    CurrentUserPasswordChange,
+    CurrentUserProfileUpdate,
+    CurrentUserSettingsUpdate,
     LocalOwnerSetupRequest,
     LocalSetupStatus,
     LoginRequest,
     LoginResponse,
     TenantSummary,
+    UserPersonalSettings,
+    UserPublicProfile,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -42,6 +47,8 @@ _login_cooldowns: dict[tuple[str, str], datetime] = {}
 
 
 def _current_user_from_principal(principal: CurrentPrincipal) -> CurrentUser:
+    public_profile = UserPublicProfile.model_validate(principal.user.public_profile or {})
+    personal_settings = UserPersonalSettings.model_validate(principal.user.personal_settings or {})
     return CurrentUser(
         id=str(principal.user.id),
         name=principal.user.name,
@@ -54,6 +61,9 @@ def _current_user_from_principal(principal: CurrentPrincipal) -> CurrentUser:
             slug=principal.tenant.slug,
             plan=principal.tenant.plan,
         ),
+        avatar_data_url=principal.user.avatar_data_url or "",
+        public_profile=public_profile,
+        personal_settings=personal_settings,
     )
 
 
@@ -83,6 +93,31 @@ def _role_codes(db: Session, user_id: int) -> list[str]:
     return list(db.scalars(query).all())
 
 
+def _current_principal_for_user(db: Session, *, user: User, tenant: Tenant, session=None) -> CurrentPrincipal:
+    return CurrentPrincipal(user=user, tenant=tenant, roles=_role_codes(db, user.id), session=session)
+
+
+def _validate_avatar_data_url(value: str) -> str:
+    if not value:
+        return ""
+    allowed_prefixes = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/gif;base64,")
+    if not value.startswith(allowed_prefixes):
+        raise HTTPException(status_code=422, detail="avatar must be a png, jpg or gif data url")
+    return value
+
+
+def _revoke_other_sessions(db: Session, *, user_id: int, keep_session_id: int | None) -> int:
+    query = select(AuthSession).where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+    sessions = list(db.scalars(query).all())
+    revoked = 0
+    for auth_session in sessions:
+        if keep_session_id is not None and auth_session.id == keep_session_id:
+            continue
+        auth_session.revoked_at = utc_now()
+        revoked += 1
+    return revoked
+
+
 def _issue_login_response(db: Session, *, user: User, tenant: Tenant, audit_action: str) -> LoginResponse:
     token = create_session_token()
     expires_at = utc_now() + timedelta(hours=8)
@@ -101,7 +136,7 @@ def _issue_login_response(db: Session, *, user: User, tenant: Tenant, audit_acti
         payload={"expires_at": expires_at.isoformat()},
     )
     db.commit()
-    principal = CurrentPrincipal(user=user, tenant=tenant, roles=_role_codes(db, user.id))
+    principal = _current_principal_for_user(db, user=user, tenant=tenant, session=session)
     return LoginResponse(
         access_token=token,
         token_type="bearer",
@@ -198,8 +233,6 @@ def _local_setup_safety_blockers() -> list[str]:
     blockers: list[str] = []
     if settings.outbox_external_write_enabled:
         blockers.append("external_write_enabled")
-    if settings.dev_bootstrap_enabled:
-        blockers.append("dev_bootstrap_enabled")
     if settings.trusted_inbound_worker_enabled:
         blockers.append("trusted_inbound_worker_enabled")
     return blockers
@@ -422,3 +455,92 @@ def current_user(
             )
         return _bootstrap_user()
     return _current_user_from_principal(principal)
+
+
+@router.patch("/me/profile", response_model=CurrentUser)
+def update_current_user_profile(
+    payload: CurrentUserProfileUpdate,
+    principal: CurrentPrincipal | None = Depends(get_current_principal_optional),
+    db: Session = Depends(get_db),
+) -> CurrentUser:
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="valid bearer token required")
+    user = db.get(User, principal.user.id)
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="valid bearer token required")
+    if payload.name is not None:
+        user.name = payload.name.strip()
+    if payload.avatar_data_url is not None:
+        user.avatar_data_url = _validate_avatar_data_url(payload.avatar_data_url.strip())
+    user.public_profile = payload.public_profile.model_dump()
+    add_audit_event(
+        db,
+        tenant_id=principal.tenant.id,
+        actor_id=user.id,
+        action="auth.self_profile_updated",
+        resource_type="user",
+        resource_id=str(user.id),
+        payload={"profile_fields": sorted(user.public_profile.keys()), "avatar_updated": payload.avatar_data_url is not None},
+    )
+    db.commit()
+    db.refresh(user)
+    return _current_user_from_principal(_current_principal_for_user(db, user=user, tenant=principal.tenant, session=principal.session))
+
+
+@router.patch("/me/settings", response_model=CurrentUser)
+def update_current_user_settings(
+    payload: CurrentUserSettingsUpdate,
+    principal: CurrentPrincipal | None = Depends(get_current_principal_optional),
+    db: Session = Depends(get_db),
+) -> CurrentUser:
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="valid bearer token required")
+    user = db.get(User, principal.user.id)
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="valid bearer token required")
+    user.personal_settings = payload.personal_settings.model_dump()
+    add_audit_event(
+        db,
+        tenant_id=principal.tenant.id,
+        actor_id=user.id,
+        action="auth.self_settings_updated",
+        resource_type="user",
+        resource_id=str(user.id),
+        payload={"setting_fields": sorted(user.personal_settings.keys())},
+    )
+    db.commit()
+    db.refresh(user)
+    return _current_user_from_principal(_current_principal_for_user(db, user=user, tenant=principal.tenant, session=principal.session))
+
+
+@router.post("/me/password", response_model=CurrentUser)
+def change_current_user_password(
+    payload: CurrentUserPasswordChange,
+    principal: CurrentPrincipal | None = Depends(get_current_principal_optional),
+    db: Session = Depends(get_db),
+) -> CurrentUser:
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="valid bearer token required")
+    user = db.get(User, principal.user.id)
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="valid bearer token required")
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="current password is incorrect")
+    user.password_hash = hash_password(payload.new_password)
+    revoked_sessions = _revoke_other_sessions(
+        db,
+        user_id=user.id,
+        keep_session_id=principal.session.id if principal.session else None,
+    )
+    add_audit_event(
+        db,
+        tenant_id=principal.tenant.id,
+        actor_id=user.id,
+        action="auth.self_password_changed",
+        resource_type="user",
+        resource_id=str(user.id),
+        payload={"revoked_sessions": revoked_sessions},
+    )
+    db.commit()
+    db.refresh(user)
+    return _current_user_from_principal(_current_principal_for_user(db, user=user, tenant=principal.tenant, session=principal.session))

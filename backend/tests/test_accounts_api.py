@@ -335,3 +335,87 @@ def test_agent_cannot_manage_local_accounts(client) -> None:
     )
     assert reset_res.status_code == 403
     assert status_res.status_code == 403
+
+
+def test_current_user_profile_settings_and_password_are_real_persisted_actions(client) -> None:
+    tenant = _create_tenant(client, "自助账号客户", "self-account-demo")
+    _owner_role, _owner, token = _bootstrap_owner(client, tenant, "self-owner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    profile_res = client.patch(
+        "/api/auth/me/profile",
+        json={
+            "name": "王敏客服",
+            "avatar_data_url": "data:image/png;base64,AA==",
+            "public_profile": {
+                "display_name": "小王",
+                "signature": "欢迎咨询",
+                "mobile": "13800000000",
+                "phone": "020-100000",
+                "qq": "10001",
+                "wechat": "service-wang",
+            },
+        },
+        headers=headers,
+    )
+    assert profile_res.status_code == 200
+    profile = profile_res.json()
+    assert profile["name"] == "王敏客服"
+    assert profile["avatar_data_url"].startswith("data:image/png")
+    assert profile["public_profile"]["display_name"] == "小王"
+
+    settings_res = client.patch(
+        "/api/auth/me/settings",
+        json={
+            "personal_settings": {
+                "system_language": "en",
+                "quick_reply_collapsed": True,
+                "quick_reply_double_click_action": "send",
+                "quick_reply_quote_mode": "append",
+                "show_typing_status": False,
+                "default_translate_language": "ja",
+                "message_notifications_enabled": False,
+                "auto_reply_enabled": True,
+                "shortcut_send_key": "ctrl_enter",
+                "service_notifications_enabled": False,
+            }
+        },
+        headers=headers,
+    )
+    assert settings_res.status_code == 200
+    settings = settings_res.json()["personal_settings"]
+    assert settings["system_language"] == "en"
+    assert settings["quick_reply_collapsed"] is True
+    assert settings["quick_reply_double_click_action"] == "send"
+    assert settings["default_translate_language"] == "ja"
+
+    me_res = client.get("/api/auth/me", headers=headers)
+    assert me_res.status_code == 200
+    me = me_res.json()
+    assert me["public_profile"]["wechat"] == "service-wang"
+    assert me["personal_settings"]["shortcut_send_key"] == "ctrl_enter"
+
+    wrong_password_res = client.post(
+        "/api/auth/me/password",
+        json={"current_password": "WrongPassword!", "new_password": "SelfNewPass123!"},
+        headers=headers,
+    )
+    assert wrong_password_res.status_code == 403
+
+    password_res = client.post(
+        "/api/auth/me/password",
+        json={"current_password": "ChangeMe123!", "new_password": "SelfNewPass123!"},
+        headers=headers,
+    )
+    assert password_res.status_code == 200
+
+    old_login = client.post(
+        "/api/auth/login",
+        json={"tenant_slug": tenant["slug"], "email": "self-owner@example.com", "password": "ChangeMe123!"},
+    )
+    new_login = client.post(
+        "/api/auth/login",
+        json={"tenant_slug": tenant["slug"], "email": "self-owner@example.com", "password": "SelfNewPass123!"},
+    )
+    assert old_login.status_code == 401
+    assert new_login.status_code == 200

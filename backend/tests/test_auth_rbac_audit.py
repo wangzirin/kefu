@@ -137,6 +137,28 @@ def test_dev_local_login_is_disabled_outside_development(client, monkeypatch) ->
     assert res.status_code == 403
 
 
+def test_local_owner_setup_is_allowed_with_dev_preview_enabled(client, monkeypatch) -> None:
+    monkeypatch.setenv("STANDARD_OPS_ENV", "development")
+    monkeypatch.setenv("STANDARD_OPS_DEV_BOOTSTRAP_ENABLED", "true")
+
+    res = client.post(
+        "/api/auth/local-setup/owner",
+        json={
+            "tenant_name": "本地客服工作台",
+            "tenant_slug": "wanfa-local",
+            "owner_name": "负责人",
+            "email": "owner@local.test",
+            "password": "ChangeMe123!",
+        },
+    )
+
+    assert res.status_code == 201
+    body = res.json()
+    assert body["token_type"] == "bearer"
+    assert body["user"]["tenant"]["slug"] == "wanfa-local"
+    assert body["user"]["email"] == "owner@local.test"
+
+
 def test_current_user_requires_real_token_in_customer_mode_even_if_dev_flag_is_misconfigured(client, monkeypatch) -> None:
     monkeypatch.setenv("STANDARD_OPS_ENV", "pilot")
     monkeypatch.setenv("STANDARD_OPS_DEV_BOOTSTRAP_ENABLED", "true")
@@ -144,6 +166,18 @@ def test_current_user_requires_real_token_in_customer_mode_even_if_dev_flag_is_m
     res = client.get("/api/auth/me")
 
     assert res.status_code == 401
+
+
+def test_current_user_rejects_invalid_token_instead_of_bootstrap_user(client, monkeypatch) -> None:
+    monkeypatch.setenv("STANDARD_OPS_ENV", "development")
+    monkeypatch.setenv("STANDARD_OPS_DEV_BOOTSTRAP_ENABLED", "true")
+
+    preview_res = client.get("/api/auth/me")
+    invalid_token_res = client.get("/api/auth/me", headers={"Authorization": "Bearer stale-token"})
+
+    assert preview_res.status_code == 200
+    assert invalid_token_res.status_code == 401
+    assert invalid_token_res.json()["detail"] == "valid bearer token required"
 
 
 def test_audit_events_require_token_and_privileged_role(client) -> None:

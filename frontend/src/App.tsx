@@ -5,18 +5,24 @@ import {
   Bot,
   BookOpen,
   BarChart3,
+  Bell,
+  BriefcaseBusiness,
   ChevronDown,
   CheckCircle2,
   ClipboardCheck,
   FileText,
+  History,
   KeyRound,
   LogIn,
   LogOut,
+  Mail,
+  Menu,
   MessageSquare,
   RefreshCw,
   Route,
   Search,
   Send,
+  Settings,
   ShieldCheck,
   Upload,
   UserPlus,
@@ -34,6 +40,7 @@ import {
   confirmOutboxDraft,
   createLocalBackup,
   createLocalOwner,
+  changeCurrentUserPassword,
   createConnectorSendPlan,
   createDiagnosticUploadPackage,
   createDiagnosticIntakeRecord,
@@ -140,6 +147,8 @@ import {
   syncKnowledgeGaps,
   stageSignedUpdatePackage,
   resetUserPassword,
+  updateCurrentUserProfile,
+  updateCurrentUserSettings,
   updateKnowledgeGap,
   updateBusinessObject,
   updateSalesLead,
@@ -202,6 +211,8 @@ import {
   type LocalMaintenanceReadiness,
   type LocalSetupStatus,
   type LoginRequest,
+  type UserPersonalSettings,
+  type UserPublicProfile,
   type CustomerQualityReport,
   type CustomerQualityReportExport,
   type CustomerQualityReportArchiveList,
@@ -265,6 +276,52 @@ import { ChannelConnectorCenterPanel } from "./components/channels/ChannelConnec
 import { KnowledgeWorkspacePage } from "./components/knowledge/KnowledgeWorkspacePage";
 import { QualityMetric, QualityReviewPanel } from "./components/quality/QualityReviewPanel";
 import type { EChartsOption } from "echarts";
+
+type AgentPresenceStatus = "online" | "away" | "busy" | "invisible";
+type AccountMenuModal = "accountInfo" | "personalSettings" | "changePassword";
+type PersonalSettingsTab = "basic" | "message" | "autoReply" | "shortcuts" | "serviceNotice";
+
+const agentPresenceOptions: Array<{
+  key: AgentPresenceStatus;
+  label: string;
+  tone: AgentPresenceStatus;
+  leaveReasons?: string[];
+}> = [
+  { key: "online", label: "在线", tone: "online" },
+  { key: "away", label: "离开", tone: "away", leaveReasons: ["会议", "就餐", "休息", "其他"] },
+  { key: "busy", label: "忙碌", tone: "busy" },
+  { key: "invisible", label: "隐身", tone: "invisible" }
+];
+
+const defaultPublicProfile: UserPublicProfile = {
+  display_name: "",
+  signature: "",
+  mobile: "",
+  phone: "",
+  qq: "",
+  wechat: ""
+};
+
+const defaultPersonalSettings: UserPersonalSettings = {
+  system_language: "zh-CN",
+  quick_reply_collapsed: false,
+  quick_reply_double_click_action: "insert",
+  quick_reply_quote_mode: "replace",
+  show_typing_status: true,
+  default_translate_language: "en",
+  message_notifications_enabled: true,
+  auto_reply_enabled: false,
+  shortcut_send_key: "enter",
+  service_notifications_enabled: true
+};
+
+function normalizePublicProfile(profile?: Partial<UserPublicProfile> | null): UserPublicProfile {
+  return { ...defaultPublicProfile, ...(profile ?? {}) };
+}
+
+function normalizePersonalSettings(settings?: Partial<UserPersonalSettings> | null): UserPersonalSettings {
+  return { ...defaultPersonalSettings, ...(settings ?? {}) };
+}
 
 const OpsDashboardChart = lazy(() =>
   import("./components/OpsDashboardChart").then((module) => ({ default: module.OpsDashboardChart }))
@@ -1040,6 +1097,26 @@ export function App() {
   const [localSetupStatus, setLocalSetupStatus] = useState<LocalSetupStatus | null>(null);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => getInitialWorkspaceSection());
   const [expandedNavGroups, setExpandedNavGroups] = useState<Record<string, boolean>>({});
+  const [isMessageCenterOpen, setIsMessageCenterOpen] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [activeAccountMenuModal, setActiveAccountMenuModal] = useState<AccountMenuModal | null>(null);
+  const [personalSettingsTab, setPersonalSettingsTab] = useState<PersonalSettingsTab>("basic");
+  const [accountProfileForm, setAccountProfileForm] = useState<{
+    name: string;
+    avatar_data_url: string;
+    public_profile: UserPublicProfile;
+  }>({ name: "", avatar_data_url: "", public_profile: defaultPublicProfile });
+  const [personalSettingsForm, setPersonalSettingsForm] = useState<UserPersonalSettings>(defaultPersonalSettings);
+  const [passwordForm, setPasswordForm] = useState({ current: "", next: "", confirm: "" });
+  const [passwordNotice, setPasswordNotice] = useState("");
+  const [accountModalNotice, setAccountModalNotice] = useState("");
+  const [accountModalSaving, setAccountModalSaving] = useState(false);
+  const [isPresenceMenuOpen, setIsPresenceMenuOpen] = useState(false);
+  const [agentPresenceStatus, setAgentPresenceStatus] = useState<AgentPresenceStatus>("online");
+  const [agentLeaveReason, setAgentLeaveReason] = useState("会议");
+  const [dialogueScope, setDialogueScope] = useState<"current" | "recent" | "colleagues">("current");
+  const [dialogueSearch, setDialogueSearch] = useState("");
+  const [collapsedDialogueSections, setCollapsedDialogueSections] = useState<Record<string, boolean>>({});
   const [overviewTaskContext, setOverviewTaskContext] = useState<WorkspaceTaskContext | null>(() =>
     parseWorkspaceTaskContext(typeof window === "undefined" ? "" : window.location.hash)
   );
@@ -1774,20 +1851,28 @@ export function App() {
   }
 
   async function handleSendLocalConversationReply(item: ConversationInboxItem, content: string) {
-    if (auth.status !== "ready" || !auth.token || !canManageConversations(auth.user)) {
-      setLocalReplyState({
-        status: "error",
-        conversationId: item.id,
-        message: "当前账号没有写入本地会话的权限"
-      });
-      return;
-    }
     const trimmed = content.trim();
     if (!trimmed) {
       setLocalReplyState({
         status: "error",
         conversationId: item.id,
         message: "回复内容不能为空"
+      });
+      return;
+    }
+    if (auth.status === "ready" && auth.mode === "demo") {
+      setLocalReplyState({
+        status: "sent",
+        conversationId: item.id,
+        message: "预览模式已模拟发送：仅更新界面提示，未写入后端，也未发送到外部平台。"
+      });
+      return;
+    }
+    if (auth.status !== "ready" || !auth.token || !canManageConversations(auth.user)) {
+      setLocalReplyState({
+        status: "error",
+        conversationId: item.id,
+        message: "当前账号没有写入本地会话的权限"
       });
       return;
     }
@@ -3446,6 +3531,25 @@ export function App() {
   }
 
   async function handleConversationWorkflowAction(item: ConversationInboxItem, action: ConversationWorkflowActionName, note?: string) {
+    if (auth.status === "ready" && auth.mode === "demo") {
+      setConversationInbox((current) => ({
+        ...current,
+        data: {
+          ...current.data,
+          items: current.data.items.map((conversation) =>
+            conversation.id === item.id
+              ? {
+                  ...conversation,
+                  status: action === "resolve" ? "resolved" : conversation.status,
+                  assigned_user_id: action === "release" ? null : conversation.assigned_user_id,
+                  next_action: note?.trim() || conversationActionNote(action)
+                }
+              : conversation
+          )
+        }
+      }));
+      return;
+    }
     if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.conversationManage)) {
       return;
     }
@@ -5541,8 +5645,10 @@ export function App() {
 
   async function enterDemo() {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-    const user = await refreshConnection(undefined, "demo");
-    const nextSection = getPostAuthWorkspaceSection(user?.roles ?? ["owner"], window.location.hash);
+    const user = createDemoCurrentUser();
+    setConnection({ status: "ready", user, mode: "demo" });
+    setAuth({ status: "ready", user, mode: "demo" });
+    const nextSection = getPostAuthWorkspaceSection(user.roles, window.location.hash);
     window.history.replaceState(null, "", getWorkspaceSectionHash(nextSection));
     setActiveSection(nextSection);
   }
@@ -5660,6 +5766,26 @@ export function App() {
   const canManageOutboxSendPlan = hasPermission(auth.user, PERMISSIONS.outboxSendPlanManage);
   const canManageOutboxDeliveryJob = hasPermission(auth.user, PERMISSIONS.outboxDeliveryJobManage);
   const canManageFailureReview = hasPermission(auth.user, PERMISSIONS.outboxFailureReviewManage);
+  const liveConversationsForWorkspace = conversationInbox.data.items;
+  const liveColleagueSummaries = (
+    accountManagement.users.length > 1
+      ? accountManagement.users
+          .filter((user) => Number(user.id) !== Number(auth.user.id))
+          .slice(0, 6)
+          .map((user, index) => ({
+            id: Number(user.id),
+            name: user.name || user.email || `同事 ${index + 1}`,
+            role: user.roles?.join(" / ") || "客服",
+            status: user.status === "disabled" || user.status === "inactive" ? "offline" : index % 3 === 1 ? "busy" : "online",
+            activeChats: liveConversationsForWorkspace.filter((item) => item.assigned_user_id === Number(user.id)).length
+          }))
+      : [
+          { id: 201, name: "客服小林", role: "售前客服", status: "online", activeChats: 3 },
+          { id: 202, name: "客服小周", role: "售后客服", status: "busy", activeChats: 6 },
+          { id: 203, name: "客服小陈", role: "值班主管", status: "online", activeChats: 1 },
+          { id: 204, name: "客服小何", role: "工单支持", status: "offline", activeChats: 0 }
+        ]
+  ) as Array<{ id: number; name: string; role: string; status: string; activeChats: number }>;
   const overviewTaskMatchCount = overviewTaskContext
     ? getWorkspaceTaskMatchCount(overviewTaskContext, {
         conversationItems: conversationInbox.data.items,
@@ -5748,12 +5874,13 @@ export function App() {
             conversationDetailStatus={conversationDetail.status}
             conversationDetailMessage={conversationDetail.message}
             localReplyState={localReplyState}
-            hasToken={Boolean(auth.token)}
-            currentUserId={auth.mode === "token" ? Number(auth.user.id) : null}
+            hasToken={Boolean(auth.token) || auth.mode === "demo"}
+            currentUserId={Number(auth.user.id)}
             canManageConversations={canManageConversation}
             targetQueue={overviewTaskContext?.targetSection === "live" ? overviewTaskContext.queue : undefined}
             targetChannelId={overviewTaskContext?.targetSection === "live" ? overviewTaskContext.channelId : null}
             channelIdentities={channelIdentities}
+            colleagues={liveColleagueSummaries}
             onRefresh={refreshLiveWorkspaceResources}
             onCreateSafeTestConversation={() => void handleCreateSafeTestConversation()}
             onSelectConversation={setSelectedLiveConversationId}
@@ -6215,76 +6342,642 @@ export function App() {
     }
   })();
 
+  const utilityNavigationLabels = new Set(["消息中心", "设置中心"]);
+  const primaryNavigationGroups = visibleNavigationGroups
+    .filter((group) => !utilityNavigationLabels.has(group.label))
+    .filter(
+      (group, index, groups) =>
+        groups.findIndex((candidate) => candidate.href === group.href) === index
+    );
+  const messageCenterGroup = visibleNavigationGroups.find((group) => group.label === "消息中心");
+  const settingsGroup = visibleNavigationGroups.find((group) => group.label === "设置中心");
+  const activeNavigationGroup =
+    visibleNavigationGroups.find((group) =>
+      group.items.some((item) => getWorkspaceSectionFromHash(item.href) === activeSection)
+    ) ??
+    primaryNavigationGroups.find((group) => getWorkspaceSectionFromHash(group.href) === activeSection) ??
+    primaryNavigationGroups[0];
+  const activeSecondaryItems = (activeNavigationGroup?.items ?? []).filter((item) => !item.hiddenFromSidebar);
+  const liveConversations = conversationInbox.data.items;
+  const parsedCurrentUserId = Number(auth.user.id);
+  const liveCurrentUserId = Number.isFinite(parsedCurrentUserId) ? parsedCurrentUserId : null;
+  const isLiveConversationActive = (item: ConversationInboxItem) => item.status !== "resolved";
+  const isLiveQueuedConversation = (item: ConversationInboxItem) =>
+    isLiveConversationActive(item) && item.assigned_user_id === null;
+  const isLiveMineConversation = (item: ConversationInboxItem) =>
+    isLiveConversationActive(item) && liveCurrentUserId !== null && item.assigned_user_id === liveCurrentUserId;
+  const isLiveVisitingConversation = (item: ConversationInboxItem) =>
+    isLiveConversationActive(item) && !isLiveQueuedConversation(item) && !isLiveMineConversation(item);
+  const livePreviewConversation =
+    liveConversations.find((item) => item.id === selectedLiveConversationId) ??
+    liveConversations.find((item) => liveCurrentUserId !== null && item.assigned_user_id === liveCurrentUserId) ??
+    liveConversations[0] ??
+    null;
+  const livePreviewTitle = livePreviewConversation
+    ? livePreviewConversation.contact_display_name || livePreviewConversation.subject || `客户 #${livePreviewConversation.contact_id}`
+    : "";
+  const livePreviewChannel = livePreviewConversation
+    ? livePreviewConversation.channel_name || livePreviewConversation.channel_type || "访客"
+    : "";
+  const liveColleagues = liveColleagueSummaries;
+  const normalizedDialogueSearch = dialogueSearch.trim().toLowerCase();
+  const matchesDialogueSearch = (item: ConversationInboxItem) => {
+    if (!normalizedDialogueSearch) {
+      return true;
+    }
+    return [
+      item.contact_display_name,
+      item.subject,
+      item.last_message_preview,
+      item.channel_name,
+      item.channel_type
+    ]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLowerCase().includes(normalizedDialogueSearch));
+  };
+  const matchesColleagueSearch = (colleague: { name: string; role: string; status: string }) => {
+    if (!normalizedDialogueSearch) {
+      return true;
+    }
+    return [colleague.name, colleague.role, formatColleagueStatus(colleague.status)]
+      .some((value) => value.toLowerCase().includes(normalizedDialogueSearch));
+  };
+  const liveCurrentConversations = liveConversations
+    .filter(isLiveConversationActive)
+    .filter(matchesDialogueSearch);
+  const liveRecentConversations = [...liveConversations]
+    .filter(matchesDialogueSearch)
+    .sort((left, right) => {
+      const leftTime = left.last_message_at ? new Date(left.last_message_at).getTime() : 0;
+      const rightTime = right.last_message_at ? new Date(right.last_message_at).getTime() : 0;
+      return rightTime - leftTime;
+    });
+  const liveVisibleColleagues = liveColleagues.filter(matchesColleagueSearch);
+  const liveQueuedConversations = liveCurrentConversations.filter(isLiveQueuedConversation);
+  const liveMineConversations = liveCurrentConversations.filter(isLiveMineConversation);
+  const liveVisitConversations = liveCurrentConversations.filter(isLiveVisitingConversation);
+  const activePresenceOption =
+    agentPresenceOptions.find((option) => option.key === agentPresenceStatus) ?? agentPresenceOptions[0];
+  const activePresenceLabel =
+    agentPresenceStatus === "away" ? `${activePresenceOption.label} · ${agentLeaveReason}` : activePresenceOption.label;
+  const toggleDialogueSection = (section: string) => {
+    setCollapsedDialogueSections((current) => ({ ...current, [section]: !current[section] }));
+  };
+  const applyUpdatedCurrentUser = (user: CurrentUser) => {
+    setAuth((current) => current.status === "ready" ? { ...current, user } : current);
+    setConnection((current) => current.status === "ready" ? { ...current, user } : current);
+  };
+  const isCurrentSessionExpired = (error: unknown) =>
+    error instanceof Error && error.message.includes("401") && error.message.includes("valid bearer token required");
+  const requireFreshLogin = () => {
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    setConnection({ status: "error", error: "登录已失效，请重新登录" });
+    setAuth({ status: "login", error: "登录已失效，请重新登录后再保存账号设置。" });
+  };
+  const openAccountMenuModal = (modal: AccountMenuModal) => {
+    setAccountModalNotice("");
+    setAccountModalSaving(false);
+    setActiveAccountMenuModal(modal);
+    setIsAccountMenuOpen(false);
+    setIsMessageCenterOpen(false);
+    setIsPresenceMenuOpen(false);
+    if (modal === "accountInfo") {
+      setAccountProfileForm({
+        name: auth.user.name || "",
+        avatar_data_url: auth.user.avatar_data_url || "",
+        public_profile: normalizePublicProfile(auth.user.public_profile)
+      });
+    }
+    if (modal === "personalSettings") {
+      setPersonalSettingsForm(normalizePersonalSettings(auth.user.personal_settings));
+    }
+    if (modal === "changePassword") {
+      setPasswordForm({ current: "", next: "", confirm: "" });
+      setPasswordNotice("");
+    }
+  };
+  const closeAccountMenuModal = () => {
+    setActiveAccountMenuModal(null);
+    setPasswordNotice("");
+  };
+  const accountRoleLabel = getWorkspaceRoleLabel(auth.user.roles);
+  const accountDisplayName = auth.user.name || auth.user.email || "admin";
+  const accountLoginName = auth.user.email?.split("@")[0] || auth.user.name || auth.user.id || "admin";
+  const accountAvatarUrl = auth.user.avatar_data_url || "";
+  const accountAvatarInitial = getAvatarInitial(
+    normalizePublicProfile(auth.user.public_profile).display_name || accountDisplayName || accountLoginName
+  );
+  const accountPublicProfile = normalizePublicProfile(accountProfileForm.public_profile);
+  const updateAccountPublicProfileField = (field: keyof UserPublicProfile, value: string) => {
+    setAccountProfileForm((current) => ({
+      ...current,
+      public_profile: { ...current.public_profile, [field]: value }
+    }));
+  };
+  const updatePersonalSettingField = <Key extends keyof UserPersonalSettings>(field: Key, value: UserPersonalSettings[Key]) => {
+    setPersonalSettingsForm((current) => ({ ...current, [field]: value }));
+  };
+  const handleAvatarFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/gif"]);
+    if (!allowedTypes.has(file.type)) {
+      setAccountModalNotice("头像只支持 jpg、gif、png 格式。");
+      return;
+    }
+    if (file.size > 500 * 1024) {
+      setAccountModalNotice("头像图片大小不能超过 500KB。");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      setAccountProfileForm((current) => ({ ...current, avatar_data_url: result }));
+      setAccountModalNotice("头像已选择，点击保存资料后生效。");
+    };
+    reader.onerror = () => setAccountModalNotice("读取头像失败，请重新选择图片。");
+    reader.readAsDataURL(file);
+  };
+  const handleSaveAccountProfile = async () => {
+    if (!accountProfileForm.name.trim()) {
+      setAccountModalNotice("登录名不能为空。");
+      return;
+    }
+    if (auth.mode === "demo" || !auth.token) {
+      const user = {
+        ...auth.user,
+        name: accountProfileForm.name.trim(),
+        avatar_data_url: accountProfileForm.avatar_data_url,
+        public_profile: normalizePublicProfile(accountProfileForm.public_profile)
+      };
+      applyUpdatedCurrentUser(user);
+      setAccountModalNotice("演示模式已更新当前界面；正式登录后会保存到后端。");
+      return;
+    }
+    try {
+      setAccountModalSaving(true);
+      setAccountModalNotice("");
+      const user = await updateCurrentUserProfile(auth.token, {
+        name: accountProfileForm.name.trim(),
+        avatar_data_url: accountProfileForm.avatar_data_url,
+        public_profile: normalizePublicProfile(accountProfileForm.public_profile)
+      });
+      applyUpdatedCurrentUser(user);
+      setAccountProfileForm({
+        name: user.name || "",
+        avatar_data_url: user.avatar_data_url || "",
+        public_profile: normalizePublicProfile(user.public_profile)
+      });
+      setAccountModalNotice("账号信息已保存。");
+    } catch (error) {
+      if (isCurrentSessionExpired(error)) {
+        requireFreshLogin();
+        setAccountModalNotice("登录已失效，请重新登录后再保存账号信息。");
+        return;
+      }
+      setAccountModalNotice(error instanceof Error ? error.message : "账号信息保存失败。");
+    } finally {
+      setAccountModalSaving(false);
+    }
+  };
+  const handleSavePersonalSettings = async () => {
+    if (auth.mode === "demo" || !auth.token) {
+      const user = { ...auth.user, personal_settings: normalizePersonalSettings(personalSettingsForm) };
+      applyUpdatedCurrentUser(user);
+      setAccountModalNotice("演示模式已更新当前界面；正式登录后会保存到后端。");
+      return;
+    }
+    try {
+      setAccountModalSaving(true);
+      setAccountModalNotice("");
+      const user = await updateCurrentUserSettings(auth.token, normalizePersonalSettings(personalSettingsForm));
+      applyUpdatedCurrentUser(user);
+      setPersonalSettingsForm(normalizePersonalSettings(user.personal_settings));
+      setAccountModalNotice("个人设置已保存。");
+    } catch (error) {
+      if (isCurrentSessionExpired(error)) {
+        requireFreshLogin();
+        setAccountModalNotice("登录已失效，请重新登录后再保存个人设置。");
+        return;
+      }
+      setAccountModalNotice(error instanceof Error ? error.message : "个人设置保存失败。");
+    } finally {
+      setAccountModalSaving(false);
+    }
+  };
+  const handlePasswordConfirm = async () => {
+    if (!passwordForm.current || !passwordForm.next || !passwordForm.confirm) {
+      setPasswordNotice("请完整填写当前密码、新密码和确认密码。");
+      return;
+    }
+    if (passwordForm.next !== passwordForm.confirm) {
+      setPasswordNotice("两次输入的新密码不一致。");
+      return;
+    }
+    if (auth.mode === "demo" || !auth.token) {
+      setPasswordNotice("演示模式不能修改真实密码，请正式登录后操作。");
+      return;
+    }
+    try {
+      setAccountModalSaving(true);
+      setPasswordNotice("");
+      const user = await changeCurrentUserPassword(auth.token, {
+        current_password: passwordForm.current,
+        new_password: passwordForm.next
+      });
+      applyUpdatedCurrentUser(user);
+      setPasswordNotice("密码已修改。");
+      setPasswordForm({ current: "", next: "", confirm: "" });
+    } catch (error) {
+      if (isCurrentSessionExpired(error)) {
+        requireFreshLogin();
+        setPasswordNotice("登录已失效，请重新登录后再修改密码。");
+        return;
+      }
+      setPasswordNotice(error instanceof Error ? error.message : "密码修改失败。");
+    } finally {
+      setAccountModalSaving(false);
+    }
+  };
+
   return (
     <main className="app-shell">
-      <aside className="sidebar" aria-label="标准运营版导航">
-        <div className="brand-lockup">
-          <div className="brand-mark">万</div>
-          <div>
-            <strong>万法常世</strong>
-            <span>客服中台 标准运营版</span>
+      <aside className="desk-sidebar" aria-label="客服工作台导航">
+        <div className="icon-rail">
+          <div className="presence-menu-anchor">
+            <button
+              type="button"
+              className={`rail-avatar is-${activePresenceOption.tone}${isPresenceMenuOpen ? " active" : ""}`}
+              aria-label={`当前坐席状态：${activePresenceLabel}`}
+              title={`当前坐席状态：${activePresenceLabel}`}
+              aria-expanded={isPresenceMenuOpen}
+              onClick={() => {
+                setIsPresenceMenuOpen((current) => !current);
+                setIsAccountMenuOpen(false);
+                setIsMessageCenterOpen(false);
+              }}
+            >
+              {accountAvatarUrl ? (
+                <img src={accountAvatarUrl} alt="" />
+              ) : (
+                <span>{accountAvatarInitial}</span>
+              )}
+              <i aria-hidden="true" />
+            </button>
+            {isPresenceMenuOpen ? (
+              <div className="presence-menu-popover" role="menu" aria-label="坐席状态">
+                {agentPresenceOptions.map((option) => (
+                  <div key={option.key} className="presence-menu-group">
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={agentPresenceStatus === option.key}
+                      className={agentPresenceStatus === option.key ? "active" : ""}
+                      onClick={() => {
+                        setAgentPresenceStatus(option.key);
+                        setIsPresenceMenuOpen(option.key === "away");
+                      }}
+                    >
+                      <span className={`presence-dot is-${option.tone}`} aria-hidden="true" />
+                      <span>{option.label}</span>
+                    </button>
+                    {option.leaveReasons && agentPresenceStatus === "away" ? (
+                      <div className="presence-submenu" role="group" aria-label="离开原因">
+                        {option.leaveReasons.map((reason) => (
+                          <button
+                            type="button"
+                            key={reason}
+                            role="menuitemradio"
+                            aria-checked={agentLeaveReason === reason}
+                            className={agentLeaveReason === reason ? "active" : ""}
+                            onClick={() => {
+                              setAgentPresenceStatus("away");
+                              setAgentLeaveReason(reason);
+                              setIsPresenceMenuOpen(false);
+                            }}
+                          >
+                            {reason}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <nav className="rail-nav" aria-label="一级模块">
+            {primaryNavigationGroups.map((group) => {
+              const isGroupActive = group.items.some((item) => getWorkspaceSectionFromHash(item.href) === activeSection);
+              return (
+                <a
+                  key={group.label}
+                  href={group.href}
+                  className={`rail-button${isGroupActive ? " active" : ""}`}
+                  data-workspace-nav={getWorkspaceSectionFromHash(group.href)}
+                  aria-label={group.label}
+                  title={group.label}
+                  onClick={() => setIsPresenceMenuOpen(false)}
+                >
+                  {getNavigationIcon(group.icon)}
+                </a>
+              );
+            })}
+          </nav>
+          <div className="rail-bottom">
+            {messageCenterGroup ? (
+              <button
+                type="button"
+                className={`rail-button${isMessageCenterOpen ? " active" : ""}`}
+                aria-label="消息中心"
+                title="消息中心"
+                onClick={() => {
+                  setIsMessageCenterOpen(true);
+                  setIsAccountMenuOpen(false);
+                  setIsPresenceMenuOpen(false);
+                }}
+              >
+                {getNavigationIcon(messageCenterGroup.icon)}
+              </button>
+            ) : null}
+            {settingsGroup ? (
+              <a
+                href={settingsGroup.href}
+                className={`rail-button${getWorkspaceSectionFromHash(settingsGroup.href) === activeSection ? " active" : ""}`}
+                data-workspace-nav={getWorkspaceSectionFromHash(settingsGroup.href)}
+                aria-label="设置中心"
+                title="设置中心"
+                onClick={() => setIsPresenceMenuOpen(false)}
+              >
+                {getNavigationIcon(settingsGroup.icon)}
+              </a>
+            ) : null}
+            <div className="account-menu-anchor">
+              <button
+                type="button"
+                className={`rail-button rail-menu-button${isAccountMenuOpen ? " active" : ""}`}
+                aria-label="主菜单"
+                title="主菜单"
+                aria-expanded={isAccountMenuOpen}
+                onClick={() => {
+                  setIsAccountMenuOpen((current) => !current);
+                  setIsMessageCenterOpen(false);
+                  setIsPresenceMenuOpen(false);
+                }}
+              >
+                <Menu size={20} />
+              </button>
+              {isAccountMenuOpen ? (
+                <div className="account-menu-popover" role="menu" aria-label="主菜单">
+                  <button type="button" role="menuitem" onClick={() => openAccountMenuModal("accountInfo")}>账号信息</button>
+                  <button type="button" role="menuitem" onClick={() => openAccountMenuModal("personalSettings")}>个人设置</button>
+                  <button type="button" role="menuitem" onClick={() => openAccountMenuModal("changePassword")}>修改密码</button>
+                  <button type="button" role="menuitem" onClick={logout}>退出系统</button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-        <div className="nav-role-summary" aria-label="当前工作台视图">
-          <strong>{getWorkspaceRoleLabel(auth.user.roles)}</strong>
-          <span>{getWorkspaceRoleHint(auth.user.roles)}</span>
-        </div>
-        <nav className="nav-list" aria-label="客服中台工作区">
-          {visibleNavigationGroups.map((group) => {
-            const isGroupActive = group.items.some((item) => getWorkspaceSectionFromHash(item.href) === activeSection);
-            const sidebarItems = group.items.filter((item) => !item.hiddenFromSidebar);
-            const hasChildMenu = sidebarItems.length > 1;
-            const isExpanded = hasChildMenu ? Boolean(expandedNavGroups[group.label]) : false;
-            return (
-              <section className={`nav-group${isGroupActive ? " active" : ""}`} key={group.label}>
-                {hasChildMenu ? (
-                  <button
-                    type="button"
-                    className={`nav-group-link${isGroupActive ? " active" : ""}`}
-                    data-workspace-nav={getWorkspaceSectionFromHash(group.href)}
-                    aria-expanded={isExpanded}
-                    onClick={() =>
-                      setExpandedNavGroups((current) => ({
-                        ...current,
-                        [group.label]: !current[group.label]
-                      }))
-                    }
-                  >
-                    <span>
-                      <strong>{group.label}</strong>
-                    </span>
-                    <ChevronDown className={`nav-chevron${isExpanded ? " expanded" : ""}`} size={15} aria-hidden="true" />
-                  </button>
-                ) : (
+
+        {activeSection === "live" ? (
+          <div className="dialogue-panel" aria-label="对话队列">
+            <label className="dialogue-search" aria-label="搜索对话">
+              <Search size={14} />
+              <input
+                type="search"
+                value={dialogueSearch}
+                onChange={(event) => setDialogueSearch(event.target.value)}
+                placeholder="搜索"
+              />
+            </label>
+            <div className="dialogue-tabs" role="tablist" aria-label="对话范围">
+              <button
+                type="button"
+                className={dialogueScope === "current" ? "active" : ""}
+                role="tab"
+                aria-selected={dialogueScope === "current"}
+                onClick={() => setDialogueScope("current")}
+              >
+                当前
+              </button>
+              <button
+                type="button"
+                className={dialogueScope === "recent" ? "active" : ""}
+                role="tab"
+                aria-selected={dialogueScope === "recent"}
+                onClick={() => setDialogueScope("recent")}
+              >
+                最近
+              </button>
+              <button
+                type="button"
+                className={dialogueScope === "colleagues" ? "active" : ""}
+                role="tab"
+                aria-selected={dialogueScope === "colleagues"}
+                onClick={() => setDialogueScope("colleagues")}
+              >
+                同事
+              </button>
+              <button type="button" className="dialogue-more" aria-label="刷新对话" title="刷新对话" onClick={refreshLiveWorkspaceResources}>
+                <RefreshCw size={13} />
+              </button>
+            </div>
+            <div className="dialogue-queue-list">
+              {dialogueScope === "colleagues" ? (
+                <section className="dialogue-colleague-list" aria-label="同事在线状态">
+                  <div className="dialogue-section-note">当前只展示其他客服同事，不混入客户会话。</div>
+                  {liveVisibleColleagues.length > 0 ? liveVisibleColleagues.map((colleague) => (
+                    <article
+                      className="dialogue-colleague-card"
+                      key={colleague.id}
+                    >
+                      <span className={`colleague-status-dot is-${colleague.status}`} aria-hidden="true" />
+                      <span>
+                        <strong>{colleague.name}</strong>
+                        <small>{colleague.role} · {formatColleagueStatus(colleague.status)} · {colleague.activeChats} 个会话</small>
+                      </span>
+                    </article>
+                  )) : (
+                    <p className="dialogue-empty">没有匹配的客服同事。</p>
+                  )}
+                </section>
+              ) : dialogueScope === "recent" ? (
+                <section className="dialogue-section">
+                  <div className="dialogue-section-note">最近按最后一条消息时间排序，包含已处理和当前会话。</div>
+                  {liveRecentConversations.length > 0 ? liveRecentConversations.slice(0, 18).map((item) => (
+                    <button
+                      key={`recent-${item.id}`}
+                      type="button"
+                      className={`dialogue-card${item.id === selectedLiveConversationId ? " active" : ""}`}
+                      onClick={() => setSelectedLiveConversationId(item.id)}
+                    >
+                      <span className="dialogue-card-avatar" aria-hidden="true">
+                        <MessageSquare size={17} />
+                      </span>
+                      <span className="dialogue-card-copy">
+                        <span className="dialogue-card-head">
+                          <strong>{item.contact_display_name || item.subject || `客户 #${item.contact_id}`}</strong>
+                          <em>{formatDateTime(item.last_message_at)}</em>
+                        </span>
+                        <small>{item.last_message_preview || item.channel_name || "最近对话"}</small>
+                      </span>
+                      {item.status === "resolved" ? <b>已结</b> : item.human_review_open_count > 0 ? <i aria-label="待处理消息">1</i> : null}
+                    </button>
+                  )) : (
+                    <p className="dialogue-empty">没有匹配的最近会话。</p>
+                  )}
+                </section>
+              ) : (
+                <>
+                  <section className="dialogue-section">
+                    <button
+                      type="button"
+                      className="dialogue-section-title"
+                      aria-expanded={!collapsedDialogueSections.queued}
+                      onClick={() => toggleDialogueSection("queued")}
+                      title="尚未分配给任何坐席、等待领取或分配的会话"
+                    >
+                      <ChevronDown className={collapsedDialogueSections.queued ? "collapsed" : ""} size={13} />
+                      <span>排队中</span>
+                      {liveQueuedConversations.length > 0 ? <small>{liveQueuedConversations.length}</small> : null}
+                    </button>
+                    {!collapsedDialogueSections.queued ? <div className="dialogue-section-note">未分配坐席，等待领取。</div> : null}
+                    {!collapsedDialogueSections.queued
+                      ? liveQueuedConversations.length > 0 ? liveQueuedConversations.map((item) => (
+                          <button
+                            key={`queued-${item.id}`}
+                            type="button"
+                            className={`dialogue-card${item.id === selectedLiveConversationId ? " active" : ""}`}
+                            onClick={() => setSelectedLiveConversationId(item.id)}
+                          >
+                            <span className="dialogue-card-avatar" aria-hidden="true">
+                              <MessageSquare size={17} />
+                            </span>
+                            <span className="dialogue-card-copy">
+                              <span className="dialogue-card-head">
+                                <strong>{item.contact_display_name || item.subject || `客户 #${item.contact_id}`}</strong>
+                                <em>{formatDateTime(item.last_message_at)}</em>
+                              </span>
+                              <small>{item.last_message_preview || item.channel_name || "你好"}</small>
+                            </span>
+                            {item.human_review_open_count > 0 ? <i aria-label="待处理消息">1</i> : null}
+                          </button>
+                        )) : <p className="dialogue-empty">当前没有排队中的会话。</p>
+                      : null}
+                  </section>
+                  <section className="dialogue-section">
+                    <button
+                      type="button"
+                      className="dialogue-section-title"
+                      aria-expanded={!collapsedDialogueSections.mine}
+                      onClick={() => toggleDialogueSection("mine")}
+                      title="已经分配给当前坐席、需要你继续处理的会话"
+                    >
+                      <ChevronDown className={collapsedDialogueSections.mine ? "collapsed" : ""} size={13} />
+                      <span>我的对话</span>
+                      <small>{liveMineConversations.length}</small>
+                    </button>
+                    {!collapsedDialogueSections.mine ? <div className="dialogue-section-note">已分配给我，正在接待。</div> : null}
+                    {!collapsedDialogueSections.mine
+                      ? liveMineConversations.length > 0 ? liveMineConversations.map((item) => (
+                          <button
+                            key={`mine-${item.id}`}
+                            type="button"
+                            className={`dialogue-card${item.id === selectedLiveConversationId ? " active" : ""}`}
+                            onClick={() => setSelectedLiveConversationId(item.id)}
+                          >
+                            <span className="dialogue-card-avatar" aria-hidden="true">
+                              <MessageSquare size={17} />
+                            </span>
+                            <span className="dialogue-card-copy">
+                              <span className="dialogue-card-head">
+                                <strong>{item.contact_display_name || item.subject || `客户 #${item.contact_id}`}</strong>
+                                <em>{formatDateTime(item.last_message_at)}</em>
+                              </span>
+                              <small>{item.last_message_preview || item.channel_name || "你好"}</small>
+                            </span>
+                            {item.human_review_open_count > 0 ? <i aria-label="待处理消息">1</i> : null}
+                          </button>
+                        )) : <p className="dialogue-empty">当前没有分配给我的会话。</p>
+                      : null}
+                  </section>
+                  <section className="dialogue-section">
+                    <button
+                      type="button"
+                      className="dialogue-section-title"
+                      aria-expanded={!collapsedDialogueSections.visiting}
+                      onClick={() => toggleDialogueSection("visiting")}
+                      title="仍在线浏览或活跃但未必已经进入人工接待的访客"
+                    >
+                      <ChevronDown className={collapsedDialogueSections.visiting ? "collapsed" : ""} size={13} />
+                      <span>访问中</span>
+                      {liveVisitConversations.length > 0 ? <small>{liveVisitConversations.length}</small> : null}
+                    </button>
+                    {!collapsedDialogueSections.visiting ? <div className="dialogue-section-note">仍在线访问，可能还未接入人工。</div> : null}
+                    {!collapsedDialogueSections.visiting
+                      ? liveVisitConversations.length > 0 ? liveVisitConversations
+                          .slice(0, 8)
+                          .map((item) => (
+                            <button
+                              key={`visiting-${item.id}`}
+                              type="button"
+                              className={`dialogue-card${item.id === selectedLiveConversationId ? " active" : ""}`}
+                              onClick={() => setSelectedLiveConversationId(item.id)}
+                            >
+                              <span className="dialogue-card-avatar" aria-hidden="true">
+                                <MessageSquare size={17} />
+                              </span>
+                              <span className="dialogue-card-copy">
+                                <span className="dialogue-card-head">
+                                  <strong>{item.contact_display_name || item.subject || `客户 #${item.contact_id}`}</strong>
+                                  <em>{formatDateTime(item.last_message_at)}</em>
+                                </span>
+                                <small>{item.last_message_preview || item.channel_name || "正在访问"}</small>
+                              </span>
+                            </button>
+                          )) : <p className="dialogue-empty">当前没有访问中的未接待会话。</p>
+                      : null}
+                  </section>
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="module-panel">
+            <div className="module-search" aria-label="模块搜索">
+              <Search size={15} />
+              <span>搜索</span>
+            </div>
+            <div className="module-heading">
+              <strong>{activeNavigationGroup?.label ?? "工作台"}</strong>
+              <small>{activeNavigationGroup?.description ?? getWorkspaceRoleHint(auth.user.roles)}</small>
+            </div>
+            <div className="nav-role-summary compact" aria-label="当前工作台视图">
+              <strong>{getWorkspaceRoleLabel(auth.user.roles)}</strong>
+              <span>{getWorkspaceRoleHint(auth.user.roles)}</span>
+            </div>
+            <nav className="module-nav" aria-label={`${activeNavigationGroup?.label ?? "当前模块"}二级菜单`}>
+              {activeSecondaryItems.length > 0 ? (
+                activeSecondaryItems.map((item) => (
                   <a
-                    href={group.href}
-                    className={`nav-group-link${isGroupActive || getWorkspaceSectionFromHash(group.href) === activeSection ? " active" : ""}`}
-                    data-workspace-nav={getWorkspaceSectionFromHash(group.href)}
+                    key={item.label}
+                    href={item.href}
+                    className={getWorkspaceSectionFromHash(item.href) === activeSection ? "active" : ""}
+                    data-workspace-nav={getWorkspaceSectionFromHash(item.href)}
                   >
-                    <span>
-                      <strong>{group.label}</strong>
-                    </span>
+                    <span>{item.label}</span>
+                    <small>{item.count}</small>
                   </a>
-                )}
-                {hasChildMenu ? (
-                  <div className={`nav-child-list${isExpanded ? " expanded" : " collapsed"}`} role="list" aria-hidden={!isExpanded}>
-                    {sidebarItems.map((item) => (
-                      <a
-                        key={item.label}
-                        href={item.href}
-                        role="listitem"
-                        className={getWorkspaceSectionFromHash(item.href) === activeSection ? "active" : ""}
-                        data-workspace-nav={getWorkspaceSectionFromHash(item.href)}
-                      >
-                        <span>{item.label}</span>
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
-              </section>
-            );
-          })}
-        </nav>
+                ))
+              ) : (
+                <span className="module-empty">当前模块暂无二级菜单</span>
+              )}
+            </nav>
+          </div>
+        )}
       </aside>
 
       <section className={`workspace workspace-${activeSection}`} ref={workspaceRef}>
@@ -6342,6 +7035,328 @@ export function App() {
           {workspaceContent}
         </section>
       </section>
+
+      {activeAccountMenuModal ? (
+        <div className="account-modal-backdrop" role="presentation">
+          <section
+            className={`account-modal account-modal-${activeAccountMenuModal}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label={activeAccountMenuModal === "accountInfo" ? "账号信息" : activeAccountMenuModal === "personalSettings" ? "个人设置" : "修改密码"}
+          >
+            <header className="account-modal-header">
+              <strong>{activeAccountMenuModal === "accountInfo" ? "账号信息" : activeAccountMenuModal === "personalSettings" ? "个人设置" : "修改密码"}</strong>
+              <button type="button" aria-label="关闭" onClick={closeAccountMenuModal}>×</button>
+            </header>
+
+            {activeAccountMenuModal === "accountInfo" ? (
+              <div className="account-info-modal-body">
+                <p className="account-info-tip">
+                  <span>!</span>
+                  除登录名和角色信息外，其余信息都会展示给对话中的客户。
+                </p>
+                <div className="account-info-layout">
+                  <div className="account-info-avatar" aria-hidden="true">
+                    {accountProfileForm.avatar_data_url ? (
+                      <img src={accountProfileForm.avatar_data_url} alt="" />
+                    ) : (
+                      <span>{getAvatarInitial(accountPublicProfile.display_name || accountProfileForm.name || accountLoginName)}</span>
+                    )}
+                  </div>
+                  <div className="account-info-profile">
+                    <label className="account-outline-button">
+                      <Upload size={15} />
+                      更换头像
+                      <input type="file" accept=".jpg,.jpeg,.gif,.png,image/jpeg,image/gif,image/png" onChange={handleAvatarFileChange} />
+                    </label>
+                    <small>*支持.jpg .gif .png格式的图片，大小不超过500KB</small>
+                  </div>
+                </div>
+                <dl className="account-info-list">
+                  <div>
+                    <dt>登录名：</dt>
+                    <dd>
+                      <input
+                        value={accountProfileForm.name}
+                        onChange={(event) => setAccountProfileForm((current) => ({ ...current, name: event.target.value }))}
+                        aria-label="登录名"
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>角色信息：</dt>
+                    <dd>{accountRoleLabel}</dd>
+                  </div>
+                  <div>
+                    <dt>对外昵称：</dt>
+                    <dd>
+                      <input
+                        value={accountPublicProfile.display_name}
+                        placeholder="-"
+                        onChange={(event) => updateAccountPublicProfileField("display_name", event.target.value)}
+                        aria-label="对外昵称"
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>自定义签名：</dt>
+                    <dd>
+                      <input
+                        value={accountPublicProfile.signature}
+                        placeholder="-"
+                        onChange={(event) => updateAccountPublicProfileField("signature", event.target.value)}
+                        aria-label="自定义签名"
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>手机：</dt>
+                    <dd>
+                      <input
+                        value={accountPublicProfile.mobile}
+                        placeholder="-"
+                        onChange={(event) => updateAccountPublicProfileField("mobile", event.target.value)}
+                        aria-label="手机"
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>座机：</dt>
+                    <dd>
+                      <input
+                        value={accountPublicProfile.phone}
+                        placeholder="-"
+                        onChange={(event) => updateAccountPublicProfileField("phone", event.target.value)}
+                        aria-label="座机"
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>邮箱：</dt>
+                    <dd>{auth.user.email || "-"}</dd>
+                  </div>
+                  <div>
+                    <dt>QQ：</dt>
+                    <dd>
+                      <input
+                        value={accountPublicProfile.qq}
+                        placeholder="-"
+                        onChange={(event) => updateAccountPublicProfileField("qq", event.target.value)}
+                        aria-label="QQ"
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>微信：</dt>
+                    <dd>
+                      <input
+                        value={accountPublicProfile.wechat}
+                        placeholder="-"
+                        onChange={(event) => updateAccountPublicProfileField("wechat", event.target.value)}
+                        aria-label="微信"
+                      />
+                    </dd>
+                  </div>
+                </dl>
+                <footer className="account-modal-footer">
+                  <span>{accountModalNotice}</span>
+                  <button type="button" className="primary" disabled={accountModalSaving} onClick={() => void handleSaveAccountProfile()}>
+                    {accountModalSaving ? "保存中" : "保存资料"}
+                  </button>
+                </footer>
+              </div>
+            ) : null}
+
+            {activeAccountMenuModal === "personalSettings" ? (
+              <div className="personal-settings-modal-body">
+                <nav className="personal-settings-tabs" aria-label="个人设置分类">
+                  {[
+                    { key: "basic", label: "基础设置" },
+                    { key: "message", label: "消息提醒" },
+                    { key: "autoReply", label: "自动回复" },
+                    { key: "shortcuts", label: "快捷键" },
+                    { key: "serviceNotice", label: "服务通知" }
+                  ].map((tab) => (
+                    <button
+                      type="button"
+                      key={tab.key}
+                      className={personalSettingsTab === tab.key ? "active" : ""}
+                      onClick={() => setPersonalSettingsTab(tab.key as PersonalSettingsTab)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </nav>
+                {personalSettingsTab === "basic" ? (
+                  <div className="personal-settings-section">
+                    <label>
+                      <span>系统语言</span>
+                      <select
+                        value={personalSettingsForm.system_language}
+                        onChange={(event) => updatePersonalSettingField("system_language", event.target.value)}
+                      >
+                        <option value="zh-CN">中文简体</option>
+                        <option value="en">English</option>
+                      </select>
+                    </label>
+                    <fieldset>
+                      <legend>快捷回复</legend>
+                      <label className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={personalSettingsForm.quick_reply_collapsed}
+                          onChange={(event) => updatePersonalSettingField("quick_reply_collapsed", event.target.checked)}
+                        />
+                        全部折叠
+                      </label>
+                    </fieldset>
+                    <fieldset>
+                      <legend>双击快捷回复</legend>
+                      <label className="radio-row">
+                        <input
+                          type="radio"
+                          name="quick-reply-action"
+                          checked={personalSettingsForm.quick_reply_double_click_action === "insert"}
+                          onChange={() => updatePersonalSettingField("quick_reply_double_click_action", "insert")}
+                        />
+                        显示在消息输入框中
+                      </label>
+                      <label className="radio-row">
+                        <input
+                          type="radio"
+                          name="quick-reply-action"
+                          checked={personalSettingsForm.quick_reply_double_click_action === "send"}
+                          onChange={() => updatePersonalSettingField("quick_reply_double_click_action", "send")}
+                        />
+                        直接发送给客人
+                      </label>
+                    </fieldset>
+                    <fieldset>
+                      <legend>引用方式</legend>
+                      <label className="radio-row">
+                        <input
+                          type="radio"
+                          name="quote-mode"
+                          checked={personalSettingsForm.quick_reply_quote_mode === "replace"}
+                          onChange={() => updatePersonalSettingField("quick_reply_quote_mode", "replace")}
+                        />
+                        覆盖引用，引用新快捷回复时词条内容会覆盖输入框中已有内容
+                      </label>
+                      <label className="radio-row">
+                        <input
+                          type="radio"
+                          name="quote-mode"
+                          checked={personalSettingsForm.quick_reply_quote_mode === "append"}
+                          onChange={() => updatePersonalSettingField("quick_reply_quote_mode", "append")}
+                        />
+                        叠加引用，引用新快捷回复时词条内容会累加至输入框
+                      </label>
+                    </fieldset>
+                    <fieldset>
+                      <legend>输入状态</legend>
+                      <label className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={personalSettingsForm.show_typing_status}
+                          onChange={(event) => updatePersonalSettingField("show_typing_status", event.target.checked)}
+                        />
+                        允许客人看到我的输入状态
+                      </label>
+                    </fieldset>
+                    <div className="personal-settings-subhead">
+                      <strong>翻译</strong>
+                      <button type="button">用量统计</button>
+                    </div>
+                    <label>
+                      <span>默认目标语言</span>
+                      <select
+                        value={personalSettingsForm.default_translate_language}
+                        onChange={(event) => updatePersonalSettingField("default_translate_language", event.target.value)}
+                      >
+                        <option value="en">英语</option>
+                        <option value="ja">日语</option>
+                        <option value="ko">韩语</option>
+                        <option value="zh-CN">中文简体</option>
+                      </select>
+                    </label>
+                    <footer className="account-modal-footer">
+                      <span>{accountModalNotice}</span>
+                      <button type="button" className="primary" disabled={accountModalSaving} onClick={() => void handleSavePersonalSettings()}>
+                        {accountModalSaving ? "保存中" : "保存设置"}
+                      </button>
+                    </footer>
+                  </div>
+                ) : (
+                  <div className="personal-settings-placeholder">
+                    <FileText size={32} />
+                    <span>{personalSettingsTab === "message" ? "暂无消息提醒配置" : personalSettingsTab === "autoReply" ? "暂无自动回复配置" : personalSettingsTab === "shortcuts" ? "暂无快捷键配置" : "暂无服务通知配置"}</span>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {activeAccountMenuModal === "changePassword" ? (
+              <div className="change-password-modal-body">
+                <label>
+                  <span>当前密码</span>
+                  <input
+                    type="password"
+                    value={passwordForm.current}
+                    placeholder="请输入当前密码"
+                    onChange={(event) => setPasswordForm((current) => ({ ...current, current: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  <span>新密码</span>
+                  <input
+                    type="password"
+                    value={passwordForm.next}
+                    placeholder="请输入新密码"
+                    onChange={(event) => setPasswordForm((current) => ({ ...current, next: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  <span>确认密码</span>
+                  <input
+                    type="password"
+                    value={passwordForm.confirm}
+                    placeholder="请输入确认密码"
+                    onChange={(event) => setPasswordForm((current) => ({ ...current, confirm: event.target.value }))}
+                  />
+                </label>
+                {passwordNotice ? <p className="change-password-notice">{passwordNotice}</p> : null}
+                <footer>
+                  <button type="button" className="primary" disabled={accountModalSaving} onClick={() => void handlePasswordConfirm()}>
+                    {accountModalSaving ? "提交中" : "确定"}
+                  </button>
+                  <button type="button" disabled={accountModalSaving} onClick={closeAccountMenuModal}>取消</button>
+                </footer>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
+
+      {isMessageCenterOpen ? (
+        <div className="message-center-backdrop" role="presentation" onClick={() => setIsMessageCenterOpen(false)}>
+          <section
+            className="message-center-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="消息中心"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <strong>消息中心</strong>
+              <button type="button" aria-label="关闭消息中心" onClick={() => setIsMessageCenterOpen(false)}>×</button>
+            </header>
+            <div className="message-center-empty">
+              <FileText size={34} />
+              <span>暂无数据</span>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -6488,6 +7503,46 @@ function isDemoPreviewRequested() {
     return false;
   }
   return new URLSearchParams(window.location.search).get("demo") === "1";
+}
+
+function createDemoCurrentUser(): CurrentUser {
+  return {
+    id: "1",
+    name: "演示负责人",
+    email: "demo@wanfa.local",
+    roles: ["owner"],
+    permissions: Object.values(PERMISSIONS),
+    tenant: {
+      id: "demo-tenant",
+      name: "万法常世演示工作台",
+      slug: "wanfa-demo",
+      plan: "standard_ops"
+    },
+    avatar_data_url: "",
+    public_profile: defaultPublicProfile,
+    personal_settings: defaultPersonalSettings
+  };
+}
+
+function getNavigationIcon(icon: string): ReactElement {
+  const size = 18;
+  const icons: Record<string, ReactElement> = {
+    message: <MessageSquare size={size} />,
+    customers: <Users size={size} />,
+    tickets: <BriefcaseBusiness size={size} />,
+    inbox: <Mail size={size} />,
+    history: <History size={size} />,
+    report: <BarChart3 size={size} />,
+    bot: <Bot size={size} />,
+    marketing: <UserPlus size={size} />,
+    wecom: <ShieldCheck size={size} />,
+    sms: <Send size={size} />,
+    form: <FileText size={size} />,
+    notice: <Bell size={size} />,
+    settings: <Settings size={size} />,
+    menu: <Menu size={size} />
+  };
+  return icons[icon] ?? <Menu size={size} />;
 }
 
 function getWorkspaceSectionFromHash(hash: string): WorkspaceSection {
@@ -16317,6 +17372,21 @@ function formatDateTime(value: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatColleagueStatus(value: string) {
+  const labels: Record<string, string> = {
+    online: "在线",
+    busy: "忙碌",
+    offline: "离线"
+  };
+  return labels[value] ?? value;
+}
+
+function getAvatarInitial(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "客";
+  return trimmed.slice(0, 1).toUpperCase();
 }
 
 function formatWorkerHealthLabel(value: string) {

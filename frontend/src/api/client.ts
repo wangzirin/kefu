@@ -5,6 +5,28 @@ export interface TenantSummary {
   plan: string;
 }
 
+export interface UserPublicProfile {
+  display_name: string;
+  signature: string;
+  mobile: string;
+  phone: string;
+  qq: string;
+  wechat: string;
+}
+
+export interface UserPersonalSettings {
+  system_language: string;
+  quick_reply_collapsed: boolean;
+  quick_reply_double_click_action: "insert" | "send";
+  quick_reply_quote_mode: "replace" | "append";
+  show_typing_status: boolean;
+  default_translate_language: string;
+  message_notifications_enabled: boolean;
+  auto_reply_enabled: boolean;
+  shortcut_send_key: "enter" | "ctrl_enter";
+  service_notifications_enabled: boolean;
+}
+
 export interface CurrentUser {
   id: string;
   name: string;
@@ -12,6 +34,9 @@ export interface CurrentUser {
   roles: string[];
   permissions: string[];
   tenant: TenantSummary;
+  avatar_data_url: string;
+  public_profile: UserPublicProfile;
+  personal_settings: UserPersonalSettings;
 }
 
 export interface LoginRequest {
@@ -2598,6 +2623,14 @@ async function requestJson<T>(
   options: RequestInit = {},
   token?: string
 ): Promise<T> {
+  const response = await fetchWithAuth(path, options, token);
+  if (!response.ok) {
+    await throwRequestError(path, response);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function fetchWithAuth(path: string, options: RequestInit = {}, token?: string): Promise<Response> {
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -2605,18 +2638,18 @@ async function requestJson<T>(
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  const response = await fetch(path, { ...options, headers });
-  if (!response.ok) {
-    let detail = "";
-    try {
-      const errorBody = await response.json();
-      detail = typeof errorBody.detail === "string" ? `: ${errorBody.detail}` : "";
-    } catch {
-      detail = "";
-    }
-    throw new Error(`${path} request failed: ${response.status}${detail}`);
+  return fetch(path, { ...options, headers });
+}
+
+async function throwRequestError(path: string, response: Response): Promise<never> {
+  let detail = "";
+  try {
+    const errorBody = await response.json();
+    detail = typeof errorBody.detail === "string" ? `: ${errorBody.detail}` : "";
+  } catch {
+    detail = "";
   }
-  return response.json() as Promise<T>;
+  throw new Error(`${path} request failed: ${response.status}${detail}`);
 }
 
 export async function getHealth() {
@@ -2625,6 +2658,52 @@ export async function getHealth() {
 
 export async function getCurrentUser(token?: string): Promise<CurrentUser> {
   return requestJson<CurrentUser>("/api/auth/me", {}, token);
+}
+
+export async function updateCurrentUserProfile(
+  token: string,
+  payload: {
+    name?: string;
+    avatar_data_url?: string;
+    public_profile: UserPublicProfile;
+  }
+): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(
+    "/api/auth/me/profile",
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    },
+    token
+  );
+}
+
+export async function updateCurrentUserSettings(
+  token: string,
+  personalSettings: UserPersonalSettings
+): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(
+    "/api/auth/me/settings",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ personal_settings: personalSettings })
+    },
+    token
+  );
+}
+
+export async function changeCurrentUserPassword(
+  token: string,
+  payload: { current_password: string; new_password: string }
+): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(
+    "/api/auth/me/password",
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    },
+    token
+  );
 }
 
 export async function login(payload: LoginRequest): Promise<LoginResponse> {

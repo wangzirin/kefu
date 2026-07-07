@@ -5,7 +5,17 @@ from typing import Tuple
 
 def _split_origins(value: str) -> Tuple[str, ...]:
     origins = [item.strip() for item in value.split(",") if item.strip()]
-    return tuple(origins or ["http://127.0.0.1:5173", "http://localhost:5173"])
+    return tuple(
+        origins
+        or [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://127.0.0.1:5174",
+            "http://localhost:5174",
+            "http://127.0.0.1:5188",
+            "http://localhost:5188",
+        ]
+    )
 
 
 @dataclass(frozen=True)
@@ -79,7 +89,9 @@ def get_settings() -> Settings:
         allowed_origins=_split_origins(
             os.getenv(
                 "STANDARD_OPS_ALLOWED_ORIGINS",
-                "http://127.0.0.1:5173,http://localhost:5173",
+                "http://127.0.0.1:5173,http://localhost:5173,"
+                "http://127.0.0.1:5174,http://localhost:5174,"
+                "http://127.0.0.1:5188,http://localhost:5188",
             )
         ),
         bailian_api_base=os.getenv("BAILIAN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
