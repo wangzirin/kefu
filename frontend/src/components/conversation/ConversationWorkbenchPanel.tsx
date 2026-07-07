@@ -1,13 +1,20 @@
 import {
   Bot,
+  File as FileIcon,
+  Image as ImageIcon,
   MessageSquare,
+  Paperclip,
   Power,
   RefreshCw,
   Search,
   Send,
+  SmilePlus,
+  Star,
   UserRound,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, KeyboardEvent } from "react";
 
 import {
   type ConversationDetail,
@@ -48,7 +55,173 @@ interface ConversationTimelineEvent {
   text: string;
   meta: string;
   href?: string;
+  richContent?: ComposerMessageContent;
 }
+
+type ComposerToolPanel = "emoji" | "attachment" | null;
+type ComposerAttachmentKind = "image" | "file";
+
+interface ComposerAttachmentDraft {
+  id: string;
+  kind: ComposerAttachmentKind;
+  name: string;
+  size: number;
+  mimeType: string;
+  inlineStored: boolean;
+  dataUrl?: string;
+  previewUrl?: string;
+}
+
+interface ComposerRatingInvite {
+  title: string;
+  description: string;
+  options: string[];
+}
+
+interface ComposerMessageContent {
+  text: string;
+  attachments: ComposerAttachmentDraft[];
+  ratingInvite?: ComposerRatingInvite;
+}
+
+interface EmojiItem {
+  label: string;
+  value: string;
+  shortcut: string;
+}
+
+interface EmojiPack {
+  key: "wechat" | "douyin" | "facebook" | "line" | "whatsapp" | "xiaohongshu";
+  label: string;
+  tag: string;
+  items: EmojiItem[];
+}
+
+const COMPOSER_MESSAGE_PREFIX = "__WANFA_COMPOSER_MESSAGE_V1__";
+const MAX_INLINE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+
+const RATING_INVITE_TEMPLATE: ComposerRatingInvite = {
+  title: "服务评价邀请",
+  description: "感谢您的咨询，麻烦对本次服务做个评价。",
+  options: ["满意", "一般", "不满意"]
+};
+
+const EMOJI_PACKS: EmojiPack[] = [
+  {
+    key: "wechat",
+    label: "微信",
+    tag: "微信表情",
+    items: [
+      { label: "微笑", value: "😊", shortcut: "[微笑]" },
+      { label: "呲牙", value: "😁", shortcut: "[呲牙]" },
+      { label: "偷笑", value: "🤭", shortcut: "[偷笑]" },
+      { label: "捂脸", value: "🤦", shortcut: "[捂脸]" },
+      { label: "流泪", value: "😭", shortcut: "[流泪]" },
+      { label: "爱心", value: "❤️", shortcut: "[爱心]" },
+      { label: "强", value: "👍", shortcut: "[强]" },
+      { label: "握手", value: "🤝", shortcut: "[握手]" },
+      { label: "抱拳", value: "🙏", shortcut: "[抱拳]" },
+      { label: "咖啡", value: "☕", shortcut: "[咖啡]" },
+      { label: "玫瑰", value: "🌹", shortcut: "[玫瑰]" },
+      { label: "庆祝", value: "🎉", shortcut: "[庆祝]" }
+    ]
+  },
+  {
+    key: "douyin",
+    label: "抖音",
+    tag: "抖音表情",
+    items: [
+      { label: "开心", value: "😄", shortcut: "[开心]" },
+      { label: "笑哭", value: "🤣", shortcut: "[笑哭]" },
+      { label: "眨眼", value: "😉", shortcut: "[眨眼]" },
+      { label: "酷", value: "😎", shortcut: "[酷]" },
+      { label: "比心", value: "🫶", shortcut: "[比心]" },
+      { label: "打call", value: "👏", shortcut: "[打call]" },
+      { label: "火", value: "🔥", shortcut: "[火]" },
+      { label: "满分", value: "💯", shortcut: "[满分]" },
+      { label: "音乐", value: "🎵", shortcut: "[音乐]" },
+      { label: "闪亮", value: "✨", shortcut: "[闪亮]" },
+      { label: "派对", value: "🥳", shortcut: "[派对]" },
+      { label: "期待", value: "🤩", shortcut: "[期待]" }
+    ]
+  },
+  {
+    key: "facebook",
+    label: "脸书",
+    tag: "脸书表情",
+    items: [
+      { label: "赞", value: "👍", shortcut: "[赞]" },
+      { label: "爱", value: "❤️", shortcut: "[爱]" },
+      { label: "关心", value: "🤗", shortcut: "[关心]" },
+      { label: "笑哭", value: "😂", shortcut: "[笑哭]" },
+      { label: "惊讶", value: "😮", shortcut: "[惊讶]" },
+      { label: "难过", value: "😢", shortcut: "[难过]" },
+      { label: "生气", value: "😡", shortcut: "[生气]" },
+      { label: "鼓掌", value: "👏", shortcut: "[鼓掌]" },
+      { label: "派对", value: "🥳", shortcut: "[派对]" },
+      { label: "祈祷", value: "🙏", shortcut: "[祈祷]" },
+      { label: "太阳", value: "☀️", shortcut: "[太阳]" },
+      { label: "星星", value: "⭐", shortcut: "[星星]" }
+    ]
+  },
+  {
+    key: "line",
+    label: "LINE",
+    tag: "LINE 表情",
+    items: [
+      { label: "开心", value: "😆", shortcut: "[开心]" },
+      { label: "害羞", value: "😊", shortcut: "[害羞]" },
+      { label: "卖萌", value: "🥺", shortcut: "[卖萌]" },
+      { label: "睡觉", value: "😴", shortcut: "[睡觉]" },
+      { label: "疑问", value: "🤔", shortcut: "[疑问]" },
+      { label: "加油", value: "💪", shortcut: "[加油]" },
+      { label: "OK", value: "👌", shortcut: "[OK]" },
+      { label: "礼物", value: "🎁", shortcut: "[礼物]" },
+      { label: "彩带", value: "🎊", shortcut: "[彩带]" },
+      { label: "小心", value: "⚠️", shortcut: "[小心]" },
+      { label: "电话", value: "☎️", shortcut: "[电话]" },
+      { label: "信封", value: "✉️", shortcut: "[信封]" }
+    ]
+  },
+  {
+    key: "whatsapp",
+    label: "WhatsApp",
+    tag: "WhatsApp 表情",
+    items: [
+      { label: "笑脸", value: "🙂", shortcut: "[笑脸]" },
+      { label: "大笑", value: "😃", shortcut: "[大笑]" },
+      { label: "眨眼", value: "😉", shortcut: "[眨眼]" },
+      { label: "酷", value: "😎", shortcut: "[酷]" },
+      { label: "亲亲", value: "😘", shortcut: "[亲亲]" },
+      { label: "思考", value: "🤔", shortcut: "[思考]" },
+      { label: "哭", value: "😥", shortcut: "[哭]" },
+      { label: "握手", value: "🤝", shortcut: "[握手]" },
+      { label: "火箭", value: "🚀", shortcut: "[火箭]" },
+      { label: "包裹", value: "📦", shortcut: "[包裹]" },
+      { label: "钱袋", value: "💰", shortcut: "[钱袋]" },
+      { label: "铃铛", value: "🔔", shortcut: "[铃铛]" }
+    ]
+  },
+  {
+    key: "xiaohongshu",
+    label: "小红书",
+    tag: "小红书表情",
+    items: [
+      { label: "喜欢", value: "🥰", shortcut: "[喜欢]" },
+      { label: "心动", value: "😍", shortcut: "[心动]" },
+      { label: "亲亲", value: "😘", shortcut: "[亲亲]" },
+      { label: "好吃", value: "😋", shortcut: "[好吃]" },
+      { label: "种草", value: "🌱", shortcut: "[种草]" },
+      { label: "收藏", value: "🔖", shortcut: "[收藏]" },
+      { label: "笔记", value: "📝", shortcut: "[笔记]" },
+      { label: "定位", value: "📌", shortcut: "[定位]" },
+      { label: "购物", value: "🛍️", shortcut: "[购物]" },
+      { label: "花花", value: "🌸", shortcut: "[花花]" },
+      { label: "草莓", value: "🍓", shortcut: "[草莓]" },
+      { label: "看看", value: "👀", shortcut: "[看看]" }
+    ]
+  }
+];
 
 export interface ChannelIdentitySummary {
   channelId: number;
@@ -148,10 +321,16 @@ export function ConversationWorkbenchPanel({
   const [editableDraft, setEditableDraft] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
   const [quickReplyTab, setQuickReplyTab] = useState<"personal" | "customer" | "custom">("personal");
+  const [activeComposerPanel, setActiveComposerPanel] = useState<ComposerToolPanel>(null);
+  const [activeEmojiPackKey, setActiveEmojiPackKey] = useState<EmojiPack["key"]>("wechat");
+  const [attachmentDrafts, setAttachmentDrafts] = useState<ComposerAttachmentDraft[]>([]);
+  const [ratingInvitePending, setRatingInvitePending] = useState(false);
   const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [transferTargetUserId, setTransferTargetUserId] = useState("");
   const [transferNote, setTransferNote] = useState("");
-  const [workflowNotice, setWorkflowNotice] = useState("");
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentDraftsRef = useRef<ComposerAttachmentDraft[]>([]);
   const validTargetQueue = normalizeWorkbenchQueueKey(targetQueue);
 
   const conversations = state.data.items;
@@ -312,11 +491,24 @@ export function ConversationWorkbenchPanel({
 
   useEffect(() => {
     setEditableDraft(draftText);
-    setWorkflowNotice("");
+    setActiveComposerPanel(null);
+    setRatingInvitePending(false);
+    setAttachmentDrafts((current) => {
+      current.forEach(revokeAttachmentPreview);
+      return [];
+    });
     setIsTransferOpen(false);
     setTransferTargetUserId("");
     setTransferNote("");
   }, [selectedConversation?.id, relatedReview?.id, latestDraft?.id, draftText]);
+
+  useEffect(() => {
+    attachmentDraftsRef.current = attachmentDrafts;
+  }, [attachmentDrafts]);
+
+  useEffect(() => () => {
+    attachmentDraftsRef.current.forEach(revokeAttachmentPreview);
+  }, []);
 
   useEffect(() => {
     if (!isTransferOpen || transferTargetUserId) {
@@ -333,6 +525,19 @@ export function ConversationWorkbenchPanel({
       setActiveQueue(validTargetQueue);
     }
   }, [validTargetQueue]);
+
+  useEffect(() => {
+    if (!selectedConversation || localReplyState.conversationId !== selectedConversation.id || localReplyState.status !== "sent") {
+      return;
+    }
+    setEditableDraft("");
+    setRatingInvitePending(false);
+    setActiveComposerPanel(null);
+    setAttachmentDrafts((current) => {
+      current.forEach(revokeAttachmentPreview);
+      return [];
+    });
+  }, [localReplyState.conversationId, localReplyState.status, selectedConversation?.id]);
 
   const isLoading = state.status === "loading";
   const pendingCount = scopedConversations.filter((item) => item.last_message_direction === "inbound").length;
@@ -369,10 +574,11 @@ export function ConversationWorkbenchPanel({
     : [];
   const localReplyIsForSelected = localReplyState.conversationId === selectedConversation.id;
   const isSendingLocalReply = localReplyIsForSelected && localReplyState.status === "sending";
+  const composerHasContent = editableDraft.trim().length > 0 || attachmentDrafts.length > 0 || ratingInvitePending;
   const canSendLocalReply =
     hasToken &&
     canManageConversations &&
-    editableDraft.trim().length > 0 &&
+    composerHasContent &&
     !isLoading &&
     !isSendingLocalReply;
   const canSaveManualDraft =
@@ -382,17 +588,6 @@ export function ConversationWorkbenchPanel({
     editableDraft.trim().length > 0 &&
     !isLoading &&
     !isSendingLocalReply;
-  const sendDisabledReason = !hasToken
-    ? "请先登录本地管理员账号，才能写入真实接管状态。"
-    : isLoading
-      ? "按钮已禁用：正在刷新会话状态。"
-      : !canManageConversations
-        ? "按钮已禁用：当前账号无权限写入本地会话。"
-        : isSendingLocalReply
-          ? "正在写入本地会话。"
-          : editableDraft.trim().length === 0
-            ? "回复内容不能为空。"
-             : "";
   const replyTextValue = editableDraft;
   const isWebsiteConversation = selectedConversation.channel_type === "website";
   const replyPlaceholder = isWebsiteConversation
@@ -400,13 +595,6 @@ export function ConversationWorkbenchPanel({
     : "输入回复内容。当前只写入本地会话，不发送到外部平台。";
   const selectedChannelLabel = selectedChannelIdentity?.platform || selectedConversation.channel_name || selectedConversation.channel_type;
   const selectedStoreLabel = selectedChannelIdentity?.storeName || selectedChannelIdentity?.accountName || `渠道 #${selectedConversation.channel_id}`;
-  const localReplyNotice = localReplyIsForSelected
-    ? localReplyState.message
-    : conversationDetailStatus === "loading"
-      ? conversationDetailMessage
-      : isWebsiteConversation
-        ? "网站本地渠道已接通，发送后访客浮窗可收到回复。"
-        : "仅本地记录，未发送到外部平台。";
   const visitorLink = `https://kf-preview.local/conversation/${selectedConversation.id}`;
   const quickReplyTemplates = {
     personal: [
@@ -456,6 +644,7 @@ export function ConversationWorkbenchPanel({
   };
   const selectedQuickReplyGroups = quickReplyTemplates[quickReplyTab];
   const selectedTransferColleague = colleagues.find((colleague) => String(colleague.id) === transferTargetUserId) ?? null;
+  const activeEmojiPack = EMOJI_PACKS.find((pack) => pack.key === activeEmojiPackKey) ?? EMOJI_PACKS[0];
   const canSubmitTransfer =
     hasToken &&
     canManageConversations &&
@@ -465,8 +654,36 @@ export function ConversationWorkbenchPanel({
   const insertQuickReply = (text: string) => {
     setEditableDraft((current) => (current.trim() ? `${current.trim()}\n${text}` : text));
   };
+  const insertEmoji = (emoji: EmojiItem) => {
+    setEditableDraft((current) => {
+      const separator = current && !/\s$/.test(current) ? " " : "";
+      return `${current}${separator}${emoji.value}`;
+    });
+  };
+  const handleAttachmentSelect = async (event: ChangeEvent<HTMLInputElement>, kind: ComposerAttachmentKind) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) {
+      return;
+    }
+    const nextDrafts = await Promise.all(files.map((file) => createAttachmentDraft(kind, file)));
+    setAttachmentDrafts((current) => [...current, ...nextDrafts].slice(0, 8));
+    setActiveComposerPanel("attachment");
+    event.target.value = "";
+  };
+  const removeAttachmentDraft = (attachmentId: string) => {
+    setAttachmentDrafts((current) => {
+      const target = current.find((attachment) => attachment.id === attachmentId);
+      if (target) {
+        revokeAttachmentPreview(target);
+      }
+      return current.filter((attachment) => attachment.id !== attachmentId);
+    });
+  };
+  const toggleRatingInvite = () => {
+    setRatingInvitePending((current) => !current);
+    setActiveComposerPanel("attachment");
+  };
   const handleEndConversation = () => {
-    setWorkflowNotice("已关闭对话，客户侧将显示“客服已关闭对话”。");
     onWorkflowAction(selectedConversation, "close", "坐席关闭当前对话，客户侧显示关闭提示。");
   };
   const handleTransferConversation = () => {
@@ -474,9 +691,29 @@ export function ConversationWorkbenchPanel({
       return;
     }
     const note = transferNote.trim() || `坐席申请转接给 ${selectedTransferColleague.name}`;
-    setWorkflowNotice(`已发起转接给 ${selectedTransferColleague.name}。`);
     setIsTransferOpen(false);
     onWorkflowAction(selectedConversation, "transfer", note, selectedTransferColleague.id, null);
+  };
+  const handleSendComposerMessage = () => {
+    if (!canSendLocalReply) {
+      return;
+    }
+    const messagePayload = buildComposerMessagePayload(editableDraft, attachmentDrafts, ratingInvitePending);
+    onSendLocalReply(selectedConversation, messagePayload);
+    setEditableDraft("");
+    setRatingInvitePending(false);
+    setActiveComposerPanel(null);
+    setAttachmentDrafts((current) => {
+      current.forEach(revokeAttachmentPreview);
+      return [];
+    });
+  };
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    handleSendComposerMessage();
   };
 
   return (
@@ -624,7 +861,7 @@ export function ConversationWorkbenchPanel({
                             <strong>{event.title}</strong>
                             <span>{event.meta}</span>
                           </header>
-                          <p>{event.text}</p>
+                          {event.richContent ? <ComposerMessageContentView content={event.richContent} fallbackText={event.text} /> : <p>{event.text}</p>}
                         </div>
                       </>
                     )}
@@ -633,16 +870,121 @@ export function ConversationWorkbenchPanel({
               </div>
 
               <footer className="miduoke-composer">
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="miduoke-hidden-file-input"
+                  onChange={(event) => handleAttachmentSelect(event, "image")}
+                />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="miduoke-hidden-file-input"
+                  onChange={(event) => handleAttachmentSelect(event, "file")}
+                />
+                <div className="miduoke-compose-tools" aria-label="消息工具">
+                  <button
+                    type="button"
+                    title="表情"
+                    className={activeComposerPanel === "emoji" ? "is-active" : ""}
+                    onClick={() => setActiveComposerPanel((current) => (current === "emoji" ? null : "emoji"))}
+                  >
+                    <SmilePlus size={18} />
+                  </button>
+                  <button type="button" title="发送图片" onClick={() => imageInputRef.current?.click()}>
+                    <ImageIcon size={18} />
+                  </button>
+                  <button type="button" title="发送文件" onClick={() => fileInputRef.current?.click()}>
+                    <Paperclip size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    title="评价邀请"
+                    className={ratingInvitePending ? "is-active" : ""}
+                    onClick={toggleRatingInvite}
+                  >
+                    <Star size={18} />
+                  </button>
+                  <span />
+                </div>
+                {activeComposerPanel === "emoji" ? (
+                  <section className="miduoke-emoji-panel" aria-label="表情面板">
+                    <div className="miduoke-emoji-tabs">
+                      {EMOJI_PACKS.map((pack) => (
+                        <button
+                          key={pack.key}
+                          type="button"
+                          className={pack.key === activeEmojiPack.key ? "is-active" : ""}
+                          onClick={() => setActiveEmojiPackKey(pack.key)}
+                        >
+                          {pack.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="miduoke-emoji-grid">
+                      {activeEmojiPack.items.map((emoji) => (
+                        <button
+                          key={`${activeEmojiPack.key}-${emoji.shortcut}`}
+                          type="button"
+                          title={`${activeEmojiPack.label} ${emoji.label}`}
+                          onClick={() => insertEmoji(emoji)}
+                        >
+                          <span aria-hidden="true">{emoji.value}</span>
+                          <small>{emoji.label}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+                {attachmentDrafts.length > 0 || ratingInvitePending ? (
+                  <section className="miduoke-attachment-tray" aria-label="待发送内容">
+                    {attachmentDrafts.map((attachment) => (
+                      <article key={attachment.id} className={`miduoke-attachment-chip is-${attachment.kind}`}>
+                        {attachment.kind === "image" && attachment.previewUrl ? (
+                          <img src={attachment.previewUrl} alt="" />
+                        ) : (
+                          <span className="miduoke-file-icon" aria-hidden="true">
+                            {attachment.kind === "image" ? <ImageIcon size={16} /> : <FileIcon size={16} />}
+                          </span>
+                        )}
+                        <span>
+                          <strong>{attachment.name}</strong>
+                          <small>
+                            {attachment.kind === "image" ? "图片" : "文件"} · {formatFileSize(attachment.size)} · {attachment.inlineStored ? "可发送" : "仅记录名称"}
+                          </small>
+                        </span>
+                        <button type="button" aria-label={`移除 ${attachment.name}`} onClick={() => removeAttachmentDraft(attachment.id)}>
+                          <X size={14} />
+                        </button>
+                      </article>
+                    ))}
+                    {ratingInvitePending ? (
+                      <article className="miduoke-attachment-chip is-rating">
+                        <span className="miduoke-file-icon" aria-hidden="true">
+                          <Star size={16} />
+                        </span>
+                        <span>
+                          <strong>{RATING_INVITE_TEMPLATE.title}</strong>
+                          <small>{RATING_INVITE_TEMPLATE.options.join(" / ")}</small>
+                        </span>
+                        <button type="button" aria-label="移除评价邀请" onClick={() => setRatingInvitePending(false)}>
+                          <X size={14} />
+                        </button>
+                      </article>
+                    ) : null}
+                  </section>
+                ) : null}
                 <textarea
                   value={replyTextValue}
                   onChange={(event) => setEditableDraft(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
                   aria-label="输入消息内容"
                   placeholder={replyPlaceholder}
                 />
                 <div className="miduoke-composer-foot">
-                  <small className={localReplyState.status === "error" && localReplyIsForSelected ? "is-error" : ""}>
-                    {workflowNotice || sendDisabledReason || localReplyNotice}
-                  </small>
                   <div>
                     {relatedReview ? (
                       <button
@@ -658,7 +1000,7 @@ export function ConversationWorkbenchPanel({
                       type="button"
                       className="miduoke-send"
                       disabled={!canSendLocalReply}
-                      onClick={() => onSendLocalReply(selectedConversation, editableDraft)}
+                      onClick={handleSendComposerMessage}
                     >
                       {isSendingLocalReply ? "写入中" : "发送"}
                       <Send size={16} />
@@ -717,6 +1059,66 @@ export function ConversationWorkbenchPanel({
   );
 }
 
+function ComposerMessageContentView({
+  content,
+  fallbackText
+}: {
+  content: ComposerMessageContent;
+  fallbackText: string;
+}) {
+  const text = content.text.trim();
+  return (
+    <div className="miduoke-rich-message">
+      {text ? <p>{text}</p> : <p>{fallbackText}</p>}
+      {content.attachments.length > 0 ? (
+        <div className="miduoke-rich-attachments">
+          {content.attachments.map((attachment, index) => (
+            <article key={`${attachment.name}-${attachment.size}-${index}`} className={`miduoke-rich-attachment is-${attachment.kind}`}>
+              {attachment.kind === "image" && attachment.dataUrl ? (
+                <img src={attachment.dataUrl} alt="" />
+              ) : (
+                <span className="miduoke-file-icon" aria-hidden="true">
+                  {attachment.kind === "image" ? <ImageIcon size={16} /> : <FileIcon size={16} />}
+                </span>
+              )}
+              <span>
+                <strong>{attachment.name}</strong>
+                <small>
+                  {attachment.kind === "image" ? "图片" : "文件"} · {formatFileSize(attachment.size)}
+                  {attachment.inlineStored ? "" : " · 仅记录名称"}
+                </small>
+              </span>
+              {attachment.dataUrl ? (
+                <a href={attachment.dataUrl} download={attachment.name}>
+                  下载
+                </a>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
+      {content.ratingInvite ? (
+        <article className="miduoke-rating-card">
+          <span className="miduoke-file-icon" aria-hidden="true">
+            <Star size={16} />
+          </span>
+          <span>
+            <strong>{content.ratingInvite.title}</strong>
+            <small>{content.ratingInvite.description}</small>
+          </span>
+          <div>
+            {content.ratingInvite.options.map((option) => (
+              <button key={option} type="button" disabled>
+                {option}
+              </button>
+            ))}
+          </div>
+        </article>
+      ) : null}
+    </div>
+  );
+}
+
 function QueueTabs({
   queues,
   activeQueue,
@@ -759,6 +1161,141 @@ function QueueButton({
       <small>{queue.note}</small>
     </button>
   );
+}
+
+function createAttachmentDraftId(kind: ComposerAttachmentKind, file: File) {
+  const randomPart =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${kind}-${file.name}-${file.size}-${file.lastModified}-${randomPart}`;
+}
+
+async function createAttachmentDraft(kind: ComposerAttachmentKind, file: File): Promise<ComposerAttachmentDraft> {
+  const dataUrl = await readInlineAttachmentDataUrl(file);
+  return {
+    id: createAttachmentDraftId(kind, file),
+    kind,
+    name: file.name,
+    size: file.size,
+    mimeType: file.type || "application/octet-stream",
+    inlineStored: Boolean(dataUrl),
+    dataUrl,
+    previewUrl: kind === "image" ? URL.createObjectURL(file) : undefined
+  };
+}
+
+function readInlineAttachmentDataUrl(file: File): Promise<string | undefined> {
+  if (file.size > MAX_INLINE_ATTACHMENT_BYTES) {
+    return Promise.resolve(undefined);
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
+    reader.onerror = () => resolve(undefined);
+    reader.readAsDataURL(file);
+  });
+}
+
+function revokeAttachmentPreview(attachment: ComposerAttachmentDraft) {
+  if (attachment.previewUrl) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
+
+function buildComposerMessagePayload(
+  text: string,
+  attachments: ComposerAttachmentDraft[],
+  includeRatingInvite: boolean
+) {
+  const normalizedText = text.trim();
+  if (attachments.length === 0 && !includeRatingInvite) {
+    return normalizedText;
+  }
+  const payload: ComposerMessageContent = {
+    text: normalizedText,
+    attachments: attachments.map((attachment) => ({
+      id: attachment.id,
+      kind: attachment.kind,
+      name: attachment.name,
+      size: attachment.size,
+      mimeType: attachment.mimeType,
+      inlineStored: attachment.inlineStored,
+      dataUrl: attachment.dataUrl
+    })),
+    ratingInvite: includeRatingInvite ? RATING_INVITE_TEMPLATE : undefined
+  };
+  return `${COMPOSER_MESSAGE_PREFIX}\n${JSON.stringify(payload)}`;
+}
+
+function parseComposerMessageContent(content: string): ComposerMessageContent | null {
+  if (!content.startsWith(COMPOSER_MESSAGE_PREFIX)) {
+    return null;
+  }
+  try {
+    const rawPayload = JSON.parse(content.slice(COMPOSER_MESSAGE_PREFIX.length).trim()) as unknown;
+    if (!isRecord(rawPayload)) {
+      return null;
+    }
+    const rawAttachments = Array.isArray(rawPayload.attachments) ? rawPayload.attachments : [];
+    const attachments = rawAttachments
+      .filter(isRecord)
+      .map((attachment, index) => {
+        const dataUrl = sanitizeAttachmentDataUrl(attachment.dataUrl);
+        return {
+          id: typeof attachment.id === "string" ? attachment.id : `attachment-${index + 1}`,
+          kind: attachment.kind === "image" ? ("image" as const) : ("file" as const),
+          name: typeof attachment.name === "string" && attachment.name.trim() ? attachment.name : `附件 ${index + 1}`,
+          size: typeof attachment.size === "number" && Number.isFinite(attachment.size) ? attachment.size : 0,
+          mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : "application/octet-stream",
+          inlineStored: attachment.inlineStored === true || Boolean(dataUrl),
+          dataUrl
+        };
+      });
+    const rawRatingInvite = isRecord(rawPayload.ratingInvite) ? rawPayload.ratingInvite : null;
+    const options = Array.isArray(rawRatingInvite?.options)
+      ? rawRatingInvite.options.filter((option): option is string => typeof option === "string" && option.trim().length > 0)
+      : RATING_INVITE_TEMPLATE.options;
+    return {
+      text: typeof rawPayload.text === "string" ? rawPayload.text : "",
+      attachments,
+      ratingInvite: rawRatingInvite
+        ? {
+            title: typeof rawRatingInvite.title === "string" ? rawRatingInvite.title : RATING_INVITE_TEMPLATE.title,
+            description: typeof rawRatingInvite.description === "string" ? rawRatingInvite.description : RATING_INVITE_TEMPLATE.description,
+            options
+          }
+        : undefined
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeAttachmentDataUrl(value: unknown) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return /^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i.test(value) ? value : undefined;
+}
+
+function summarizeComposerMessage(content: ComposerMessageContent) {
+  const parts = [
+    content.text.trim(),
+    ...content.attachments.map((attachment) => (attachment.kind === "image" ? `[图片] ${attachment.name}` : `[文件] ${attachment.name}`)),
+    content.ratingInvite ? "[评价邀请]" : ""
+  ].filter(Boolean);
+  return parts.join("\n") || "空消息";
+}
+
+function formatFileSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  const kilobytes = bytes / 1024;
+  if (kilobytes < 1024) return `${kilobytes.toFixed(kilobytes >= 10 ? 0 : 1)} KB`;
+  const megabytes = kilobytes / 1024;
+  if (megabytes < 1024) return `${megabytes.toFixed(megabytes >= 10 ? 0 : 1)} MB`;
+  return `${(megabytes / 1024).toFixed(1)} GB`;
 }
 
 function compactText(value: string, maxLength: number) {
@@ -1071,6 +1608,7 @@ function buildConversationTimeline({
   const events: ConversationTimelineEvent[] = sortedMessages.map((message) => {
     const outbound = message.direction === "outbound";
     const outboundMeta = conversation.channel_type === "website" ? "已发送到网站访客" : "本地记录";
+    const richContent = parseComposerMessageContent(message.content);
     const kind: ConversationTimelineEvent["kind"] = message.sender_type === "system"
       ? "system"
       : outbound
@@ -1086,8 +1624,9 @@ function buildConversationTimeline({
         : outbound
           ? (message.sender_type === "ai" ? "AI 建议" : "坐席")
           : conversation.contact_display_name || `联系人 #${conversation.contact_id}`,
-      text: message.content || "空消息",
-      meta: `${outbound ? outboundMeta : conversation.channel_name} · ${formatDateTime(message.created_at)}`
+      text: richContent ? summarizeComposerMessage(richContent) : message.content || "空消息",
+      meta: `${outbound ? outboundMeta : conversation.channel_name} · ${formatDateTime(message.created_at)}`,
+      richContent: richContent ?? undefined
     };
   });
   if (events.length === 0) {

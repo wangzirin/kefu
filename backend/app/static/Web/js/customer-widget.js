@@ -17,6 +17,7 @@
   var mode = config.mode || currentScript && currentScript.getAttribute("data-mode") || "widget";
   var buttonText = config.buttonText || currentScript && currentScript.getAttribute("data-button-text") || "在线咨询";
   var existing = document.querySelector('[data-wanfa-customer-widget="' + componentId + '"]');
+  var composerMessagePrefix = "__WANFA_COMPOSER_MESSAGE_V1__";
 
   if (existing) {
     return;
@@ -47,6 +48,17 @@
     ".wanfa-msg{margin:0 0 12px;border-radius:10px;background:#fff;color:#23364d;padding:12px 13px;font-size:14px;line-height:1.55;box-shadow:0 1px 0 rgba(15,35,64,.06)}",
     ".wanfa-msg.agent{background:#eaf3ff;color:#153a66}",
     ".wanfa-msg.system{background:#f1f4f8;color:#607086;text-align:center}",
+    ".wanfa-rich{display:grid;gap:8px}",
+    ".wanfa-rich-text{white-space:pre-wrap;word-break:break-word}",
+    ".wanfa-attachment,.wanfa-rating{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:8px;align-items:center;border:1px solid rgba(67,104,148,.18);border-radius:8px;background:rgba(255,255,255,.62);padding:8px}",
+    ".wanfa-attachment-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:7px;background:#fff;color:#1677ff;font-size:16px}",
+    ".wanfa-attachment img{width:34px;height:34px;border-radius:7px;object-fit:cover;background:#fff}",
+    ".wanfa-attachment strong,.wanfa-attachment small,.wanfa-rating strong,.wanfa-rating small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+    ".wanfa-attachment strong,.wanfa-rating strong{font-size:13px}",
+    ".wanfa-attachment small,.wanfa-rating small{color:#617089;font-size:12px}",
+    ".wanfa-attachment a{color:#0b63ce;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}",
+    ".wanfa-rating-options{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}",
+    ".wanfa-rating-options button{border:1px solid #cfe0f6;border-radius:999px;background:#fff;color:#1d4f86;padding:6px 10px;font-size:12px;font-weight:700}",
     ".wanfa-actions{display:none;gap:8px;margin-top:8px}",
     ".wanfa-actions.show{display:flex}",
     ".wanfa-actions button{flex:1;border:1px solid #c9d8ea;border-radius:8px;background:#fff;color:#1d4f86;padding:9px 10px;font-size:13px;font-weight:700;cursor:pointer}",
@@ -109,6 +121,156 @@
     body.appendChild(message);
     body.scrollTop = body.scrollHeight;
     return message;
+  }
+
+  function appendAgentMessage(content) {
+    var richContent = parseComposerMessageContent(content || "");
+    if (!richContent) {
+      appendMessage("客服：" + content, "agent");
+      return;
+    }
+    var message = document.createElement("div");
+    message.className = "wanfa-msg agent";
+    var rich = document.createElement("div");
+    rich.className = "wanfa-rich";
+    if (richContent.text) {
+      var text = document.createElement("div");
+      text.className = "wanfa-rich-text";
+      text.textContent = "客服：" + richContent.text;
+      rich.appendChild(text);
+    }
+    for (var i = 0; i < richContent.attachments.length; i += 1) {
+      rich.appendChild(createAttachmentNode(richContent.attachments[i]));
+    }
+    if (richContent.ratingInvite) {
+      rich.appendChild(createRatingNode(richContent.ratingInvite));
+    }
+    if (!rich.childNodes.length) {
+      rich.textContent = "客服发送了一条消息";
+    }
+    message.appendChild(rich);
+    body.appendChild(message);
+    body.scrollTop = body.scrollHeight;
+  }
+
+  function createAttachmentNode(attachment) {
+    var node = document.createElement("div");
+    node.className = "wanfa-attachment";
+    if (attachment.kind === "image" && attachment.dataUrl) {
+      var image = document.createElement("img");
+      image.alt = "";
+      image.src = attachment.dataUrl;
+      node.appendChild(image);
+    } else {
+      var icon = document.createElement("span");
+      icon.className = "wanfa-attachment-icon";
+      icon.textContent = attachment.kind === "image" ? "图" : "文";
+      node.appendChild(icon);
+    }
+    var copy = document.createElement("span");
+    var name = document.createElement("strong");
+    name.textContent = attachment.name || "附件";
+    var meta = document.createElement("small");
+    meta.textContent = (attachment.kind === "image" ? "图片" : "文件") + " · " + formatFileSize(attachment.size || 0)
+      + (attachment.inlineStored ? "" : " · 仅记录名称");
+    copy.appendChild(name);
+    copy.appendChild(meta);
+    node.appendChild(copy);
+    if (attachment.dataUrl) {
+      var link = document.createElement("a");
+      link.href = attachment.dataUrl;
+      link.download = attachment.name || "attachment";
+      link.textContent = "下载";
+      node.appendChild(link);
+    }
+    return node;
+  }
+
+  function createRatingNode(invite) {
+    var node = document.createElement("div");
+    node.className = "wanfa-rating";
+    var icon = document.createElement("span");
+    icon.className = "wanfa-attachment-icon";
+    icon.textContent = "评";
+    var copy = document.createElement("span");
+    var title = document.createElement("strong");
+    title.textContent = invite.title || "服务评价邀请";
+    var description = document.createElement("small");
+    description.textContent = invite.description || "感谢您的咨询，麻烦对本次服务做个评价。";
+    var options = document.createElement("div");
+    options.className = "wanfa-rating-options";
+    for (var i = 0; i < invite.options.length; i += 1) {
+      var option = document.createElement("button");
+      option.type = "button";
+      option.textContent = invite.options[i];
+      options.appendChild(option);
+    }
+    copy.appendChild(title);
+    copy.appendChild(description);
+    node.appendChild(icon);
+    node.appendChild(copy);
+    node.appendChild(options);
+    return node;
+  }
+
+  function parseComposerMessageContent(content) {
+    if (!content || content.indexOf(composerMessagePrefix) !== 0) {
+      return null;
+    }
+    try {
+      var raw = JSON.parse(content.slice(composerMessagePrefix.length));
+      var attachments = Array.isArray(raw.attachments) ? raw.attachments : [];
+      var normalizedAttachments = [];
+      for (var i = 0; i < attachments.length; i += 1) {
+        if (!attachments[i] || typeof attachments[i] !== "object") {
+          continue;
+        }
+        normalizedAttachments.push({
+          kind: attachments[i].kind === "image" ? "image" : "file",
+          name: String(attachments[i].name || "附件 " + (i + 1)),
+          size: Number(attachments[i].size || 0),
+          inlineStored: attachments[i].inlineStored === true || Boolean(sanitizeAttachmentDataUrl(attachments[i].dataUrl)),
+          dataUrl: sanitizeAttachmentDataUrl(attachments[i].dataUrl)
+        });
+      }
+      var rawInvite = raw.ratingInvite && typeof raw.ratingInvite === "object" ? raw.ratingInvite : null;
+      return {
+        text: typeof raw.text === "string" ? raw.text : "",
+        attachments: normalizedAttachments,
+        ratingInvite: rawInvite ? {
+          title: typeof rawInvite.title === "string" ? rawInvite.title : "服务评价邀请",
+          description: typeof rawInvite.description === "string" ? rawInvite.description : "感谢您的咨询，麻烦对本次服务做个评价。",
+          options: Array.isArray(rawInvite.options) ? rawInvite.options : ["满意", "一般", "不满意"]
+        } : null
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function sanitizeAttachmentDataUrl(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+    return /^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i.test(value) ? value : "";
+  }
+
+  function formatFileSize(bytes) {
+    if (!bytes || !isFinite(bytes) || bytes <= 0) {
+      return "0 B";
+    }
+    if (bytes < 1024) {
+      return bytes + " B";
+    }
+    var kilobytes = bytes / 1024;
+    if (kilobytes < 1024) {
+      return (kilobytes >= 10 ? kilobytes.toFixed(0) : kilobytes.toFixed(1)) + " KB";
+    }
+    var megabytes = kilobytes / 1024;
+    if (megabytes < 1024) {
+      return (megabytes >= 10 ? megabytes.toFixed(0) : megabytes.toFixed(1)) + " MB";
+    }
+    return (megabytes / 1024).toFixed(1) + " GB";
   }
 
   function getVisitorId() {
@@ -208,7 +370,7 @@
           if (messages[i].sender_type === "system") {
             appendMessage(messages[i].content || "本次咨询已结束", "system");
           } else {
-            appendMessage("客服：" + messages[i].content, "agent");
+            appendAgentMessage(messages[i].content || "");
           }
           saveLastSeenMessageId(messages[i].id);
         }
