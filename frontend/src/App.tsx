@@ -280,6 +280,7 @@ import { ChannelConnectorCenterPanel } from "./components/channels/ChannelConnec
 import { KnowledgeWorkspacePage } from "./components/knowledge/KnowledgeWorkspacePage";
 import { QualityMetric, QualityReviewPanel } from "./components/quality/QualityReviewPanel";
 import type { EChartsOption } from "echarts";
+import type { WorkspacePageComponent } from "./pages/workspace/types";
 
 type AgentPresenceStatus = "online" | "away" | "busy" | "invisible";
 type AccountMenuModal = "accountInfo" | "personalSettings" | "changePassword";
@@ -330,6 +331,29 @@ function normalizePersonalSettings(settings?: Partial<UserPersonalSettings> | nu
 const OpsDashboardChart = lazy(() =>
   import("./components/OpsDashboardChart").then((module) => ({ default: module.OpsDashboardChart }))
 );
+const workspacePageComponents: Partial<Record<WorkspaceSection, WorkspacePageComponent>> = {
+  overview: lazy(() => import("./pages/workspace/OverviewPage")),
+  conversations: lazy(() => import("./pages/workspace/ConversationPage")),
+  tickets: lazy(() => import("./pages/workspace/TicketsPage")),
+  live: lazy(() => import("./pages/workspace/LivePage")),
+  reviews: lazy(() => import("./pages/workspace/ReviewsPage")),
+  outbox: lazy(() => import("./pages/workspace/OutboxPage")),
+  contacts: lazy(() => import("./pages/workspace/ContactsPage")),
+  leads: lazy(() => import("./pages/workspace/LeadsPage")),
+  knowledge: lazy(() => import("./pages/workspace/KnowledgePage")),
+  gaps: lazy(() => import("./pages/workspace/GapsPage")),
+  channels: lazy(() => import("./pages/workspace/ChannelsPage")),
+  ops: lazy(() => import("./pages/workspace/OpsPage")),
+  model: lazy(() => import("./pages/workspace/ModelPage")),
+  pilot: lazy(() => import("./pages/workspace/PilotPage")),
+  settings: lazy(() => import("./pages/workspace/SettingsPage")),
+  evals: lazy(() => import("./pages/workspace/EvalsPage")),
+  quality: lazy(() => import("./pages/workspace/QualityPage"))
+};
+
+function WorkspaceRouteLoading() {
+  return <div className="workspace-route-loading" role="status">页面加载中</div>;
+}
 
 const TOKEN_STORAGE_KEY = "wanfa_standard_ops_access_token";
 const NO_PERMISSION_MESSAGE = "当前账号无权读取此模块，请联系管理员开通权限。";
@@ -5935,525 +5959,269 @@ export function App() {
         knowledgeEvaluation
       })
     : null;
-  const workspaceContent = (() => {
-    switch (activeSection) {
-      case "overview":
-        return (
-          <WorkbenchCommandCenter
-            businessOpsDashboard={businessOpsDashboard.data}
-            dashboardStatus={businessOpsDashboard.status}
-            dashboardMessage={"message" in businessOpsDashboard ? businessOpsDashboard.message : null}
-            reviewItems={reviewItems}
-            outboxDrafts={outboxDrafts}
-            failureReviews={failureReviewItems}
-            deliveryJobs={deliveryJobs}
-            latestEvaluationRun={knowledgeEvaluation.lastRun}
-            onRequestBusinessOpsDashboard={(params) => {
-              if (auth.mode === "token" && auth.token && canReadDashboard(auth.user)) {
-                void refreshBusinessOpsDashboard(auth.user.tenant.id, auth.token, params);
-              }
-            }}
-          />
-        );
-      case "conversations":
-        return (
-          <ConversationInboxPanel
-            state={conversationInbox}
-            listView={conversationInboxView}
-            filters={conversationInboxFilters}
-            hasToken={Boolean(auth.token)}
-            currentUserId={auth.mode === "token" ? Number(auth.user.id) : null}
-            canManageConversations={canManageConversation}
-            onListViewChange={handleConversationInboxViewChange}
-            onFiltersChange={handleConversationInboxFiltersChange}
-            onRefresh={() => {
-              if (auth.token && canReadConversations(auth.user)) {
-                void refreshConversationInbox(auth.user.tenant.id, auth.token);
-              }
-            }}
-            onWorkflowAction={(item, action) => void handleConversationWorkflowAction(item, action)}
-          />
-        );
-      case "tickets":
-        return (
-          <SupportTicketPanel
-            state={supportTickets}
-            conversationState={conversationInbox}
-            listView={supportTicketListView}
-            filters={supportTicketFilters}
-            hasToken={Boolean(auth.token)}
-            currentUserId={auth.mode === "token" ? Number(auth.user.id) : null}
-            canManageTickets={canManageTicket}
-            onListViewChange={handleSupportTicketListViewChange}
-            onFiltersChange={handleSupportTicketFiltersChange}
-            onRefresh={() => {
-              if (auth.token && canReadTickets(auth.user)) {
-                void refreshSupportTickets(auth.user.tenant.id, auth.token, supportTicketListView, supportTicketFilters);
-              }
-            }}
-            onCreateFromConversation={(item) => void handleCreateSupportTicket(item)}
-            onUpdateStatus={(ticket, statusValue) => void handleUpdateSupportTicketStatus(ticket, statusValue)}
-          />
-        );
-      case "live":
-        if (dialogueScope === "colleagues" && selectedLiveColleague) {
-          return <LiveColleagueProfilePanel colleague={selectedLiveColleague} />;
-        }
-        return (
-          <ConversationWorkbenchPanel
-            state={conversationInbox}
-            reviewItems={reviewItems}
-            replyDecisions={replyDecisions}
-            replyDecisionStatus={replyDecisionState.status}
-            outboxDrafts={outboxDrafts}
-            failureReviews={failureReviewItems}
-            deliveryJobs={deliveryJobs}
-            selectedConversationId={selectedLiveConversationId}
-            conversationDetail={conversationDetail.data?.id === selectedLiveConversationId ? conversationDetail.data : null}
-            conversationDetailStatus={conversationDetail.status}
-            conversationDetailMessage={conversationDetail.message}
-            localReplyState={localReplyState}
-            hasToken={Boolean(auth.token) || auth.mode === "demo"}
-            currentUserId={Number(auth.user.id)}
-            canManageConversations={canManageConversation}
-            targetQueue={overviewTaskContext?.targetSection === "live" ? overviewTaskContext.queue : undefined}
-            targetChannelId={overviewTaskContext?.targetSection === "live" ? overviewTaskContext.channelId : null}
-            channelIdentities={channelIdentities}
-            colleagues={liveColleagueSummaries}
-            onRefresh={refreshLiveWorkspaceResources}
-            onCreateSafeTestConversation={() => void handleCreateSafeTestConversation()}
-            onSelectConversation={setSelectedLiveConversationId}
-            onSendLocalReply={(item, content) => void handleSendLocalConversationReply(item, content)}
-            canApproveReviewDraft={canManageConversation && canManageOutboxDraft}
-            canConfirmOutboxDraft={canManageOutboxDraft}
-            onWorkflowAction={(item, action, note, targetUserId, targetTeamId) =>
-              void handleConversationWorkflowAction(item, action, note, targetUserId, targetTeamId)
-            }
-            onApproveReviewDraft={(item, finalReply, resolutionNote) =>
-              void handleReviewApprove(item, { finalReply, resolutionNote })
-            }
-            onConfirmOutboxDraft={(draftId) => void handleConfirmDraft(draftId)}
-          />
-        );
-      case "reviews":
-        return (
-          <section className="workspace-page-grid two-column">
-            <ReviewInboxPanel
-              state={reviewInbox}
-              workerRun={lastInboundWorkerRun}
-              listView={reviewListView}
-              hasToken={Boolean(auth.token)}
-              canManageConversations={canManageConversation}
-              canRunInboundWorker={canRunInboundWorkerWorkspace}
-              canManageOutboxDraft={canManageOutboxDraft}
-              selectedReviewId={selectedReview?.id ?? null}
-              onListViewChange={setReviewListView}
-              onRefresh={() => {
-                if (auth.token && canReadConversations(auth.user)) {
-                  void refreshReviewInbox(auth.user.tenant.id, auth.token);
-                }
-              }}
-              onRunInboundWorker={() => void handleRunInboundWorker()}
-              onSelect={(item) => setSelectedReviewId(item.id)}
-              onApprove={(item) => void handleReviewApprove(item)}
-              onReject={(item) => void handleReviewReject(item)}
-            />
-            <ReviewEvidenceDetail
-              item={selectedReview}
-              outboxDrafts={outboxDrafts}
-              failureReviews={failureReviewItems}
-              deliveryJobs={deliveryJobs}
-              onSelectReview={(item) => setSelectedReviewId(item.id)}
-            />
-          </section>
-        );
-      case "outbox":
-        return (
-          <OutboxPanel
-            state={outbox}
-            workerRun={lastWorkerRun}
-            deliveryQueue={deliveryQueue}
-            deliveryQueueRun={lastDeliveryQueueRun}
-            listView={outboxListView}
-            hasToken={Boolean(auth.token)}
-            canManageConnector={canManageChannelConnector}
-            canManageDraft={canManageOutboxDraft}
-            canManageSendAttempt={canManageOutboxSendAttempt}
-            canManageSendPlan={canManageOutboxSendPlan}
-            canManageDeliveryJob={canManageOutboxDeliveryJob}
-            onListViewChange={setOutboxListView}
-            onRefresh={() => {
-              if (auth.token) {
-                if (canReadOutboxDrafts(auth.user)) {
-                  void refreshOutbox(auth.user.tenant.id, auth.token);
-                }
-                if (canReadOutboxDeliveryJobs(auth.user)) {
-                  void refreshDeliveryQueue(auth.user.tenant.id, auth.token);
-                }
-              }
-            }}
-            onRunWorker={() => void handleRunWorker()}
-            onRunDeliveryQueue={() => void handleRunDeliveryQueue()}
-            onDryRun={(draftId) => void handleDryRun(draftId)}
-            onConnectorPlan={(draft) => void handleConnectorPlan(draft)}
-            onCreateDeliveryJob={(draft) => void handleCreateDeliveryJob(draft)}
-            onConfirm={(draftId) => void handleConfirmDraft(draftId)}
-          />
-        );
-      case "contacts":
-        return (
-          <ContactProfilesPanel
-            state={contactProfiles}
-            listView={contactProfileListView}
-            hasToken={Boolean(auth.token)}
-            onListViewChange={handleContactProfileListViewChange}
-            onRefresh={() => {
-              if (auth.token && canReadCustomers(auth.user)) {
-                void refreshContactProfiles(auth.user.tenant.id, auth.token, contactProfileListView);
-              }
-            }}
-            onSelect={(contactId) => void handleSelectContactProfile(contactId)}
-          />
-        );
-      case "leads":
-        return (
-          <SalesLeadPanel
-            state={salesLeads}
-            conversationState={conversationInbox}
-            listView={salesLeadListView}
-            filters={salesLeadFilters}
-            hasToken={Boolean(auth.token)}
-            currentUserId={auth.mode === "token" ? Number(auth.user.id) : null}
-            canManageLeads={canManageLead}
-            onListViewChange={handleSalesLeadListViewChange}
-            onFiltersChange={handleSalesLeadFiltersChange}
-            onRefresh={() => {
-              if (auth.token && canReadLeads(auth.user)) {
-                void refreshSalesLeads(auth.user.tenant.id, auth.token, salesLeadListView, salesLeadFilters);
-              }
-            }}
-            onCreateFromConversation={(item) => void handleCreateSalesLead(item)}
-            onUpdateStage={(lead, stage) => void handleUpdateSalesLeadStage(lead, stage)}
-          />
-        );
-      case "knowledge":
-        return (
-          <KnowledgeWorkspacePage
-            mode="library"
-            documentState={knowledgeWorkbench}
-            gapState={knowledgeGaps}
-            evaluationState={knowledgeEvaluation}
-            meshState={knowledgeMemoryMesh}
-            hasToken={Boolean(auth.token)}
-            canManage={canManageKnowledgeWorkspace}
-            onRefreshMesh={() => {
-              if (auth.token && canReadKnowledgeDocuments(auth.user)) {
-                void refreshKnowledgeMemoryMeshOverview(auth.user.tenant.id, auth.token);
-              }
-            }}
-          >
-            <KnowledgeDocumentsPanel
-              state={knowledgeWorkbench}
-              evaluationState={knowledgeEvaluation}
-              customerQualityReport={customerQualityReport}
-              customerQualityReportSignoffs={customerQualityReportSignoffs}
-              updatePackageDraft={knowledgeUpdatePackageDraft}
-              replyStrategyState={tenantReplyStrategy}
-              replyStrategyDraft={replyStrategyDraft}
-              businessObjectDraft={businessObjectDraft}
-              objectKnowledgeCardDraft={objectKnowledgeCardDraft}
-              draft={knowledgeDraft}
-              searchQuery={knowledgeSearchQuery}
-              listView={knowledgeDocumentListView}
-              hasToken={Boolean(auth.token)}
-              canImport={canManageKnowledgeWorkspace}
-              onBusinessObjectDraftChange={setBusinessObjectDraft}
-              onUpdatePackageDraftChange={setKnowledgeUpdatePackageDraft}
-              onReplyStrategyDraftChange={setReplyStrategyDraft}
-              onObjectKnowledgeCardDraftChange={setObjectKnowledgeCardDraft}
-              onDraftChange={setKnowledgeDraft}
-              onSearchQueryChange={setKnowledgeSearchQuery}
-              onListViewChange={setKnowledgeDocumentListView}
-              onCreateBusinessObject={() => void handleSaveBusinessObject()}
-              onPreviewUpdatePackage={() => void handlePreviewKnowledgeUpdatePackage()}
-              onImportUpdatePackage={() => void handleImportKnowledgeUpdatePackage()}
-              onSaveReplyStrategy={() => void handleSaveTenantReplyStrategy()}
-              onCreateObjectKnowledgeCard={() => void handleCreateObjectKnowledgeCard()}
-              onImportDocument={() => void handleImportKnowledgeDocument()}
-              onSearchDocuments={() => void handleSearchKnowledgeDocuments()}
-              onCheckPublishDocument={(document) => void handleCheckKnowledgeDocumentPublishGate(document)}
-              onPublishDocument={(document) => void handlePublishKnowledgeDocument(document)}
-              onRollbackDocument={(document) => void handleRollbackKnowledgeDocument(document)}
-              onRefresh={() => {
-                if (auth.token && canReadKnowledgeDocuments(auth.user)) {
-                  void refreshKnowledgeDocuments(auth.user.tenant.id, auth.token, canManageKnowledgeWorkspace);
-                  void refreshKnowledgeMemoryMeshOverview(auth.user.tenant.id, auth.token);
-                }
-              }}
-            />
-          </KnowledgeWorkspacePage>
-        );
-      case "gaps":
-        return (
-          <KnowledgeWorkspacePage
-            mode="gaps"
-            documentState={knowledgeWorkbench}
-            gapState={knowledgeGaps}
-            evaluationState={knowledgeEvaluation}
-            meshState={knowledgeMemoryMesh}
-            hasToken={Boolean(auth.token)}
-            canManage={canManageKnowledgeWorkspace}
-            onRefreshMesh={() => {
-              if (auth.token && canReadKnowledgeDocuments(auth.user)) {
-                void refreshKnowledgeMemoryMeshOverview(auth.user.tenant.id, auth.token);
-              }
-            }}
-          >
-            <KnowledgeGapPanel
-              state={knowledgeGaps}
-              listView={knowledgeGapListView}
-              hasToken={Boolean(auth.token)}
-              canManage={canManageKnowledgeWorkspace}
-              onListViewChange={handleKnowledgeGapListViewChange}
-              onRefresh={() => {
-                if (auth.token && canReadKnowledgeGaps(auth.user)) {
-                  void refreshKnowledgeGaps(auth.user.tenant.id, auth.token, knowledgeGapListView);
-                  void refreshKnowledgeMemoryMeshOverview(auth.user.tenant.id, auth.token);
-                }
-              }}
-              onSync={() => void handleSyncKnowledgeGaps()}
-              onUpdate={(gap, statusValue) => void handleUpdateKnowledgeGap(gap, statusValue)}
-              onCreateDocumentDraft={(gap) => void handleCreateKnowledgeGapDocumentDraft(gap)}
-              onCreateRegressionCase={(gap) => void handleCreateKnowledgeGapRegressionCase(gap)}
-              onPublishDocument={(gap) => void handlePublishKnowledgeGapDocument(gap)}
-            />
-          </KnowledgeWorkspacePage>
-        );
-      case "channels":
-        return (
-          <ChannelConnectorCenterPanel
-            selectedChannelId={getChannelEntryIdFromHash(workspaceHash)}
-            reviewItems={reviewItems}
-            outboxDrafts={outboxDrafts}
-            failureReviews={failureReviewItems}
-            deliveryJobs={deliveryJobs}
-            workerRun={lastInboundWorkerRun}
-            channelAccountState={channelAccountState}
-            hasToken={Boolean(auth.token)}
-            canManageConnector={canManageChannelConnector}
-            tenantId={auth.user.tenant.id}
-            onConfigureChannelAccount={(channelId, payload) => handleConfigureChannelAccount(channelId, payload)}
-            onRefreshChannelAccounts={() => {
-              if (auth.token && canReadChannels(auth.user)) {
-                void refreshChannelAccounts(auth.user.tenant.id, auth.token);
-              }
-            }}
-            onCreateSafeTestConversation={handleCreateSafeTestConversation}
-          />
-        );
-      case "ops":
-        return (
-          <OpsWorkerHealthPanel
-            state={opsWorkerHealth}
-            alertRulesState={opsAlertRules}
-            metricsState={opsMetrics}
-            hasToken={Boolean(auth.token)}
-            onRefresh={() => {
-              if (auth.token) {
-                if (canReadOpsWorkerHealth(auth.user)) {
-                  void refreshOpsWorkerHealth(auth.user.tenant.id, auth.token);
-                }
-                if (canReadOpsAlertRules(auth.user)) {
-                  void refreshOpsAlertRules(auth.user.tenant.id, auth.token);
-                }
-                if (canReadOpsMetrics(auth.user)) {
-                  void refreshOpsMetrics(auth.user.tenant.id, auth.token);
-                }
-              }
-            }}
-          />
-        );
-      case "model":
-        return (
-          <ModelRoutingPanel
-            latestEvaluationRun={knowledgeEvaluation.lastRun}
-            reviewItems={reviewItems}
-            outboxDrafts={outboxDrafts}
-            ragGovernance={ragCostGovernance}
-            llmOpsReadiness={llmOpsReadiness}
-            hasToken={Boolean(auth.token)}
-            onRefresh={() => {
-              if (auth.token && canReadOpsMetrics(auth.user)) {
-                void refreshRagCostGovernance(auth.user.tenant.id, auth.token);
-                void refreshLlmOpsReadiness(auth.user.tenant.id, auth.token);
-              }
-            }}
-          />
-        );
-      case "pilot":
-        return (
-          <PilotPreparationPanel
-            pilotReadiness={pilotReadiness}
-            localMaintenanceReadiness={localMaintenanceReadiness}
-            monthlyOpsReport={monthlyOpsReport}
-            knowledgeConfirmationImport={knowledgeConfirmationImport}
-            customerMaterialPrecheck={customerMaterialPrecheck}
-            customerMaterialBatches={customerMaterialBatches}
-            customerMaterialTemplatePackage={customerMaterialTemplatePackage}
-            customerMaterialHandoffBundle={customerMaterialHandoffBundle}
-            canImportConfirmation={hasKnowledgeManagePermission(auth.user)}
-            onRefresh={() => {
-              if (auth.token && canReadOpsMetrics(auth.user)) {
-                void refreshPilotReadiness(auth.user.tenant.id, auth.token);
-              }
-              if (auth.token && hasKnowledgeManagePermission(auth.user)) {
-                void refreshCustomerMaterialBatches(auth.user.tenant.id, auth.token);
-              }
-            }}
-            onImportKnowledgeConfirmation={(filename, csvText) =>
-              void handleImportKnowledgeConfirmation(filename, csvText)
-            }
-            onPrecheckCustomerMaterials={(materialsCsv, questionsCsv, manifestJson) =>
-              void handlePrecheckCustomerMaterials(materialsCsv, questionsCsv, manifestJson)
-            }
-            onLoadCustomerMaterialBatches={() => {
-              if (auth.token && hasKnowledgeManagePermission(auth.user)) {
-                void refreshCustomerMaterialBatches(auth.user.tenant.id, auth.token);
-              }
-            }}
-            onLoadCustomerMaterialTemplatePackage={() => void handleLoadCustomerMaterialTemplatePackage()}
-            onDownloadCustomerMaterialHandoffBundle={() => void handleDownloadCustomerMaterialHandoffBundle()}
-          />
-        );
-      case "settings":
-        return (
-          <AccountManagementPanel
-            state={accountManagement}
-            diagnosticExport={diagnosticExport}
-            diagnosticIntake={diagnosticIntake}
-            diagnosticRemediation={diagnosticRemediation}
-            localMaintenanceReadiness={localMaintenanceReadiness}
-            localBackupState={localBackupState}
-            localRestoreDryRun={localRestoreDryRun}
-            signedUpdatePreflight={signedUpdatePreflight}
-            signedUpdateStage={signedUpdateStage}
-            currentUser={auth.user}
-            hasToken={Boolean(auth.token)}
-            onCreateUser={handleCreateAccountUser}
-            onUpdateUserStatus={handleUpdateAccountUserStatus}
-            onResetUserPassword={handleResetAccountUserPassword}
-            onExportDiagnosticBundle={handleExportDiagnosticBundle}
-            onCreateDiagnosticUploadPackage={handleCreateDiagnosticUploadPackage}
-            onCreateDiagnosticIntakeRecord={handleCreateDiagnosticIntakeRecord}
-            onUpdateDiagnosticIntakeRecord={handleUpdateDiagnosticIntakeRecord}
-            onDownloadDiagnosticIntakeRecord={handleDownloadDiagnosticIntakeRecord}
-            onCreateDiagnosticRemediationRequest={handleCreateDiagnosticRemediationRequest}
-            onUpdateDiagnosticRemediationRequest={handleUpdateDiagnosticRemediationRequest}
-            onDownloadDiagnosticRemediationRequest={handleDownloadDiagnosticRemediationRequest}
-            onCreateDiagnosticRemediationUpdatePlan={handleCreateDiagnosticRemediationUpdatePlan}
-            onCreateLocalBackup={handleCreateLocalBackup}
-            onVerifyLocalBackup={handleVerifyLocalBackup}
-            onCreateLocalBackupRestoreDryRun={handleCreateLocalBackupRestoreDryRun}
-            onPreflightSignedUpdatePackage={handlePreflightSignedUpdatePackage}
-            onStageSignedUpdatePackage={handleStageSignedUpdatePackage}
-            onApplySignedUpdatePackage={handleApplySignedUpdatePackage}
-            onCreateProgramUpdateDryRun={handleCreateProgramUpdateDryRun}
-            onRollbackSignedUpdatePackage={handleRollbackSignedUpdatePackage}
-            onRefresh={() => {
-              if (auth.token && canManageAccounts(auth.user)) {
-                void refreshAccountManagement(auth.user.tenant.id, auth.token);
-              }
-              if (auth.token && canReadOpsMetrics(auth.user)) {
-                void refreshDiagnosticIntakes(auth.user.tenant.id, auth.token);
-                void refreshDiagnosticRemediations(auth.user.tenant.id, auth.token);
-              }
-              if (auth.token && canManageSignedUpdates(auth.user)) {
-                void refreshLocalMaintenanceReadiness(auth.user.tenant.id, auth.token);
-                void refreshSignedUpdatePackages(auth.user.tenant.id, auth.token);
-                void refreshLocalBackups(auth.user.tenant.id, auth.token);
-              }
-            }}
-          />
-        );
-      case "evals":
-        return (
-          <KnowledgeWorkspacePage
-            mode="evals"
-            documentState={knowledgeWorkbench}
-            gapState={knowledgeGaps}
-            evaluationState={knowledgeEvaluation}
-            meshState={knowledgeMemoryMesh}
-            hasToken={Boolean(auth.token)}
-            canManage={canManageKnowledgeWorkspace}
-            onRefreshMesh={() => {
-              if (auth.token && canReadKnowledgeDocuments(auth.user)) {
-                void refreshKnowledgeMemoryMeshOverview(auth.user.tenant.id, auth.token);
-              }
-            }}
-          >
-            <KnowledgeEvaluationPanel
-              state={knowledgeEvaluation}
-              draft={evaluationDraft}
-              questionBankDraft={customerQuestionBankDraft}
-              labelImportDraft={finalAnswerLabelImportDraft}
-              setListView={evaluationSetListView}
-              resultListView={evaluationResultListView}
-              hasToken={Boolean(auth.token)}
-              canManage={canManageKnowledgeWorkspace}
-              onDraftChange={setEvaluationDraft}
-              onQuestionBankDraftChange={setCustomerQuestionBankDraft}
-              onLabelImportDraftChange={setFinalAnswerLabelImportDraft}
-              onPrecheckQuestionBank={() => void handlePrecheckCustomerQuestionBank()}
-              onImportQuestionBank={() => void handleImportCustomerQuestionBank()}
-              onSetListViewChange={setEvaluationSetListView}
-              onResultListViewChange={setEvaluationResultListView}
-              onCreateSet={() => void handleCreateKnowledgeEvaluationSet()}
-              onRunSet={(setId) => void handleRunKnowledgeEvaluation(setId)}
-              onLoadRun={(runId) => void handleLoadKnowledgeEvaluationRun(runId)}
-              onLabelFactuality={(runCase, statusValue) => void handleLabelEvaluationRunCaseFactuality(runCase, statusValue)}
-              onCaptureFinalAnswerSample={(runCase, finalAnswerText) =>
-                void handleCaptureEvaluationRunCaseFinalAnswerSample(runCase, finalAnswerText)
-              }
-              onBatchLabelSampledFactuality={(run, statusValue) => void handleBatchLabelSampledFactuality(run, statusValue)}
-              onExportReport={(runId, reportFormat) => void handleExportKnowledgeEvaluationRunReport(runId, reportFormat)}
-              onExportFinalAnswerLabels={(runId) => void handleExportFinalAnswerLabels(runId)}
-              onPrecheckFinalAnswerLabels={(runId) => void handlePrecheckFinalAnswerLabels(runId)}
-              onImportFinalAnswerLabels={(runId) => void handleImportFinalAnswerLabels(runId)}
-              onRefresh={() => {
-                if (auth.token && canReadKnowledgeEvaluations(auth.user)) {
-                  void refreshKnowledgeEvaluations(auth.user.tenant.id, auth.token, true);
-                  void refreshKnowledgeMemoryMeshOverview(auth.user.tenant.id, auth.token);
-                }
-              }}
-            />
-          </KnowledgeWorkspacePage>
-        );
-      case "quality":
-        return (
-          <QualityReviewPanel
-            conversationInbox={conversationInbox}
-            reviewItems={reviewItems}
-            outboxDrafts={outboxDrafts}
-            failureReviews={failureReviewItems}
-            deliveryJobs={deliveryJobs}
-            knowledgeEvaluation={knowledgeEvaluation}
-            monthlyQualityReview={monthlyQualityReview}
-            monthlyOpsReport={monthlyOpsReport}
-            onlineReceiptQuality={onlineReceiptQuality}
-            customerQualityReport={customerQualityReport}
-            customerQualityReportArchives={customerQualityReportArchives}
-            customerQualityReportSignoffs={customerQualityReportSignoffs}
-            knowledgeGaps={knowledgeGaps}
-            onExportCustomerQualityReport={(format) => void handleExportCustomerQualityReport(format)}
-            onDownloadCustomerQualityReportArchive={(archiveEventId) => void handleDownloadCustomerQualityReportArchive(archiveEventId)}
-            onRecordCustomerQualityReportSignoff={(payload) => void handleRecordCustomerQualityReportSignoff(payload)}
-            canRecordCustomerQualityReportSignoff={canManageAccounts(auth.user)}
-          />
-        );
-      default:
-        return null;
-    }
-  })();
+  const WorkspacePage = workspacePageComponents[activeSection] ?? null;
+  const workspacePageContext = {
+    Components: {
+      AccountManagementPanel,
+      ChannelConnectorCenterPanel,
+      ContactProfilesPanel,
+      ConversationInboxPanel,
+      ConversationWorkbenchPanel,
+      KnowledgeDocumentsPanel,
+      KnowledgeEvaluationPanel,
+      KnowledgeGapPanel,
+      KnowledgeWorkspacePage,
+      LiveColleagueProfilePanel,
+      ModelRoutingPanel,
+      OpsWorkerHealthPanel,
+      OutboxPanel,
+      PilotPreparationPanel,
+      QualityReviewPanel,
+      ReviewEvidenceDetail,
+      ReviewInboxPanel,
+      SalesLeadPanel,
+      SupportTicketPanel,
+      WorkbenchCommandCenter
+    },
+    accountManagement,
+    activeSection,
+    auth,
+    businessObjectDraft,
+    businessOpsDashboard,
+    canManageAccounts,
+    canManageChannelConnector,
+    canManageConversation,
+    canManageKnowledgeWorkspace,
+    canManageLead,
+    canManageOutboxDeliveryJob,
+    canManageOutboxDraft,
+    canManageOutboxSendAttempt,
+    canManageOutboxSendPlan,
+    canManageSignedUpdates,
+    canManageTicket,
+    canReadChannels,
+    canReadConversations,
+    canReadCustomers,
+    canReadDashboard,
+    canReadKnowledgeDocuments,
+    canReadKnowledgeEvaluations,
+    canReadKnowledgeGaps,
+    canReadLeads,
+    canReadOpsAlertRules,
+    canReadOpsMetrics,
+    canReadOpsWorkerHealth,
+    canReadOutboxDeliveryJobs,
+    canReadOutboxDrafts,
+    canReadTickets,
+    canRunInboundWorkerWorkspace,
+    channelAccountState,
+    channelIdentities,
+    contactProfileListView,
+    contactProfiles,
+    conversationDetail,
+    conversationInbox,
+    conversationInboxFilters,
+    conversationInboxView,
+    customerMaterialBatches,
+    customerMaterialHandoffBundle,
+    customerMaterialPrecheck,
+    customerMaterialTemplatePackage,
+    customerQualityReport,
+    customerQualityReportArchives,
+    customerQualityReportSignoffs,
+    customerQuestionBankDraft,
+    deliveryJobs,
+    deliveryQueue,
+    dialogueScope,
+    diagnosticExport,
+    diagnosticIntake,
+    diagnosticRemediation,
+    evaluationDraft,
+    evaluationResultListView,
+    evaluationSetListView,
+    failureReviewItems,
+    finalAnswerLabelImportDraft,
+    getChannelEntryIdFromHash,
+    handleApplySignedUpdatePackage,
+    handleBatchLabelSampledFactuality,
+    handleCaptureEvaluationRunCaseFinalAnswerSample,
+    handleCheckKnowledgeDocumentPublishGate,
+    handleConfigureChannelAccount,
+    handleConfirmDraft,
+    handleConnectorPlan,
+    handleContactProfileListViewChange,
+    handleConversationInboxFiltersChange,
+    handleConversationInboxViewChange,
+    handleConversationWorkflowAction,
+    handleCreateAccountUser,
+    handleCreateBusinessObject: handleSaveBusinessObject,
+    handleCreateDeliveryJob,
+    handleCreateDiagnosticIntakeRecord,
+    handleCreateDiagnosticRemediationRequest,
+    handleCreateDiagnosticRemediationUpdatePlan,
+    handleCreateDiagnosticUploadPackage,
+    handleCreateKnowledgeEvaluationSet,
+    handleCreateKnowledgeGapDocumentDraft,
+    handleCreateKnowledgeGapRegressionCase,
+    handleCreateLocalBackup,
+    handleCreateLocalBackupRestoreDryRun,
+    handleCreateObjectKnowledgeCard,
+    handleCreateProgramUpdateDryRun,
+    handleCreateSafeTestConversation,
+    handleCreateSalesLead,
+    handleCreateSupportTicket,
+    handleDownloadCustomerMaterialHandoffBundle,
+    handleDownloadCustomerQualityReportArchive,
+    handleDownloadDiagnosticIntakeRecord,
+    handleDownloadDiagnosticRemediationRequest,
+    handleDryRun,
+    handleExportCustomerQualityReport,
+    handleExportFinalAnswerLabels,
+    handleExportKnowledgeEvaluationRunReport,
+    handleExportDiagnosticBundle,
+    handleImportCustomerQuestionBank,
+    handleImportKnowledgeConfirmation,
+    handleImportKnowledgeDocument,
+    handleImportKnowledgeUpdatePackage,
+    handleImportFinalAnswerLabels,
+    handleLabelEvaluationRunCaseFactuality,
+    handleLoadCustomerMaterialTemplatePackage,
+    handleLoadKnowledgeEvaluationRun,
+    handlePrecheckCustomerMaterials,
+    handlePrecheckCustomerQuestionBank,
+    handlePrecheckFinalAnswerLabels,
+    handlePreflightSignedUpdatePackage,
+    handlePreviewKnowledgeUpdatePackage,
+    handlePublishKnowledgeDocument,
+    handlePublishKnowledgeGapDocument,
+    handleRecordCustomerQualityReportSignoff,
+    handleResetAccountUserPassword,
+    handleReviewApprove,
+    handleReviewReject,
+    handleRollbackKnowledgeDocument,
+    handleRollbackSignedUpdatePackage,
+    handleRunDeliveryQueue,
+    handleRunInboundWorker,
+    handleRunKnowledgeEvaluation,
+    handleRunWorker,
+    handleSalesLeadFiltersChange,
+    handleSalesLeadListViewChange,
+    handleSaveBusinessObject,
+    handleSaveTenantReplyStrategy,
+    handleSearchKnowledgeDocuments,
+    handleSelectContactProfile,
+    handleSendLocalConversationReply,
+    handleStageSignedUpdatePackage,
+    handleSupportTicketFiltersChange,
+    handleSupportTicketListViewChange,
+    handleSyncKnowledgeGaps,
+    handleUpdateAccountUserStatus,
+    handleUpdateDiagnosticIntakeRecord,
+    handleUpdateDiagnosticRemediationRequest,
+    handleUpdateKnowledgeGap,
+    handleUpdateSalesLeadStage,
+    handleUpdateSupportTicketStatus,
+    handleVerifyLocalBackup,
+    hasKnowledgeManagePermission,
+    knowledgeConfirmationImport,
+    knowledgeDocumentListView,
+    knowledgeDraft,
+    knowledgeEvaluation,
+    knowledgeGapListView,
+    knowledgeGaps,
+    knowledgeMemoryMesh,
+    knowledgeSearchQuery,
+    knowledgeUpdatePackageDraft,
+    knowledgeWorkbench,
+    lastDeliveryQueueRun,
+    lastInboundWorkerRun,
+    lastWorkerRun,
+    liveColleagueSummaries,
+    llmOpsReadiness,
+    localBackupState,
+    localMaintenanceReadiness,
+    localReplyState,
+    localRestoreDryRun,
+    monthlyOpsReport,
+    monthlyQualityReview,
+    objectKnowledgeCardDraft,
+    onlineReceiptQuality,
+    opsAlertRules,
+    opsMetrics,
+    opsWorkerHealth,
+    outbox,
+    outboxDrafts,
+    outboxListView,
+    overviewTaskContext,
+    pilotReadiness,
+    ragCostGovernance,
+    refreshAccountManagement,
+    refreshBusinessOpsDashboard,
+    refreshChannelAccounts,
+    refreshContactProfiles,
+    refreshCustomerMaterialBatches,
+    refreshDeliveryQueue,
+    refreshDiagnosticIntakes,
+    refreshDiagnosticRemediations,
+    refreshKnowledgeDocuments,
+    refreshKnowledgeEvaluations,
+    refreshKnowledgeGaps,
+    refreshKnowledgeMemoryMeshOverview,
+    refreshLiveWorkspaceResources,
+    refreshLlmOpsReadiness,
+    refreshLocalBackups,
+    refreshLocalMaintenanceReadiness,
+    refreshOpsAlertRules,
+    refreshOpsMetrics,
+    refreshOpsWorkerHealth,
+    refreshOutbox,
+    refreshPilotReadiness,
+    refreshRagCostGovernance,
+    refreshReviewInbox,
+    refreshSalesLeads,
+    refreshSignedUpdatePackages,
+    refreshSupportTickets,
+    replyDecisionState,
+    replyDecisions,
+    replyStrategyDraft,
+    reviewInbox,
+    reviewItems,
+    reviewListView,
+    salesLeadFilters,
+    salesLeadListView,
+    salesLeads,
+    selectedLiveColleague,
+    selectedLiveConversationId,
+    selectedReview,
+    setBusinessObjectDraft,
+    setCustomerQuestionBankDraft,
+    setEvaluationDraft,
+    setEvaluationResultListView,
+    setEvaluationSetListView,
+    setFinalAnswerLabelImportDraft,
+    setKnowledgeDocumentListView,
+    setKnowledgeDraft,
+    setKnowledgeSearchQuery,
+    setKnowledgeUpdatePackageDraft,
+    setObjectKnowledgeCardDraft,
+    setOutboxListView,
+    setReplyStrategyDraft,
+    setReviewListView,
+    setSelectedLiveConversationId,
+    setSelectedReviewId,
+    signedUpdatePreflight,
+    signedUpdateStage,
+    supportTicketFilters,
+    supportTicketListView,
+    supportTickets,
+    tenantReplyStrategy,
+    workspaceHash
+  };
+  const workspaceContent = WorkspacePage ? (
+    <Suspense fallback={<WorkspaceRouteLoading />}>
+      <WorkspacePage ctx={workspacePageContext} />
+    </Suspense>
+  ) : null;
 
   const utilityNavigationLabels = new Set(["消息中心", "设置中心"]);
   const primaryNavigationGroups = visibleNavigationGroups

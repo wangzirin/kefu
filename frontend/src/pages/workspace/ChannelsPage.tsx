@@ -1,0 +1,26 @@
+import type { WorkspacePageProps } from "./types";
+
+export default function ChannelsPage({ ctx }: WorkspacePageProps) {
+  const { ChannelConnectorCenterPanel } = ctx.Components;
+  return (
+    <ChannelConnectorCenterPanel
+      selectedChannelId={ctx.getChannelEntryIdFromHash(ctx.workspaceHash)}
+      reviewItems={ctx.reviewItems}
+      outboxDrafts={ctx.outboxDrafts}
+      failureReviews={ctx.failureReviewItems}
+      deliveryJobs={ctx.deliveryJobs}
+      workerRun={ctx.lastInboundWorkerRun}
+      channelAccountState={ctx.channelAccountState}
+      hasToken={Boolean(ctx.auth.token)}
+      canManageConnector={ctx.canManageChannelConnector}
+      tenantId={ctx.auth.user.tenant.id}
+      onConfigureChannelAccount={(channelId: number, payload: any) => ctx.handleConfigureChannelAccount(channelId, payload)}
+      onRefreshChannelAccounts={() => {
+        if (ctx.auth.token && ctx.canReadChannels(ctx.auth.user)) {
+          void ctx.refreshChannelAccounts(ctx.auth.user.tenant.id, ctx.auth.token);
+        }
+      }}
+      onCreateSafeTestConversation={ctx.handleCreateSafeTestConversation}
+    />
+  );
+}

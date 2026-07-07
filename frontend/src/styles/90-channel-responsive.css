@@ -1,0 +1,709 @@
+/* Extracted from styles.css lines 15753-16460. Keep import order stable. */
+.workspace-channels {
+  background: #edf1f6;
+}
+
+.workspace-page-channels {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+}
+
+.miduoke-channel-settings {
+  min-height: 100%;
+  border: 0;
+  background: #edf1f6;
+  padding: 0;
+}
+
+.miduoke-channel-settings .channel-access-main {
+  display: grid;
+  grid-template-rows: 58px minmax(0, 1fr);
+  gap: 0;
+  min-height: 100%;
+  background: #edf1f6;
+}
+
+.miduoke-channel-settings .channel-access-topbar {
+  min-height: 58px;
+  border-bottom: 1px solid #e3e7ee;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+  padding: 0 24px;
+}
+
+.miduoke-channel-settings .channel-access-topbar strong {
+  color: #071527;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.miduoke-channel-layout {
+  display: grid;
+  grid-template-columns: minmax(760px, 1096px) minmax(260px, 320px);
+  gap: 16px;
+  align-items: start;
+  min-width: 0;
+  padding: 18px;
+}
+
+.miduoke-channel-main {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.miduoke-access-card,
+.miduoke-list-card,
+.miduoke-guide-panel {
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+}
+
+.miduoke-access-card {
+  min-height: 156px;
+  padding: 24px;
+}
+
+.miduoke-access-card h2,
+.miduoke-list-card h2,
+.miduoke-guide-panel h2 {
+  margin: 0;
+  color: #061426;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.miduoke-access-card p {
+  margin: 8px 0 12px;
+  border-bottom: 1px solid #e8ebef;
+  color: #334b67;
+  padding-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.miduoke-access-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+
+.miduoke-primary-button,
+.miduoke-secondary-button {
+  min-width: 104px;
+  height: 32px;
+  border: 1px solid #0b66f6;
+  border-radius: 4px;
+  padding: 0 18px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.miduoke-primary-button {
+  background: #0b66f6;
+  color: #ffffff;
+}
+
+.miduoke-secondary-button {
+  border-color: #d4d9e2;
+  background: #ffffff;
+  color: #2d3d50;
+}
+
+.miduoke-access-notes {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.miduoke-access-notes p {
+  margin: 0;
+  border: 0;
+  color: #a4afbd;
+  padding: 0;
+  font-size: 13px;
+}
+
+.miduoke-list-card {
+  min-height: 566px;
+  padding: 24px;
+}
+
+.miduoke-list-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.miduoke-list-toolbar > div:first-child {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.miduoke-list-toolbar small {
+  color: #7c8ca1;
+  font-size: 13px;
+}
+
+.miduoke-search-group {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.miduoke-search-group select,
+.miduoke-search-group input {
+  height: 34px;
+  border: 1px solid #d5dae3;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #243447;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.miduoke-search-group select {
+  width: 190px;
+}
+
+.miduoke-search-group input {
+  width: 242px;
+}
+
+.miduoke-search-group button {
+  min-width: 60px;
+  height: 34px;
+  border: 0;
+  border-radius: 4px;
+  background: #0b66f6;
+  color: #ffffff;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.miduoke-channel-table {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.miduoke-channel-row {
+  display: grid;
+  align-items: center;
+  min-width: 1000px;
+  min-height: 92px;
+  border-bottom: 1px solid #dfe3e9;
+  color: #384a5e;
+  font-size: 14px;
+}
+
+.miduoke-channel-row.head {
+  min-height: 46px;
+  border-bottom: 1px solid #d6dbe4;
+  background: #f2f4f7;
+  color: #4b5c70;
+  font-size: 14px;
+}
+
+.miduoke-channel-row span {
+  min-width: 0;
+  padding: 0 14px;
+}
+
+.miduoke-channel-row strong,
+.miduoke-channel-row small {
+  display: block;
+}
+
+.miduoke-channel-row strong {
+  color: #344254;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.miduoke-channel-row small {
+  margin-top: 8px;
+  color: #a1aab6;
+  font-size: 13px;
+}
+
+.miduoke-channel-actions {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.miduoke-channel-actions button {
+  border: 0;
+  background: transparent;
+  color: #005bd8;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.miduoke-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 360px;
+  color: #9aa7b7;
+  text-align: center;
+}
+
+.miduoke-empty-state span {
+  width: 34px;
+  height: 40px;
+  border: 1px solid #e1e6ee;
+  background:
+    linear-gradient(#eef2f7 0 0) 8px 8px / 18px 2px no-repeat,
+    linear-gradient(#eef2f7 0 0) 8px 14px / 18px 2px no-repeat,
+    linear-gradient(#eef2f7 0 0) 8px 20px / 13px 2px no-repeat,
+    #f8fafc;
+  box-shadow: 4px 4px 0 #eef2f7;
+}
+
+.miduoke-empty-state p {
+  margin: 12px 0 0;
+  color: #9aa7b7;
+  font-size: 14px;
+}
+
+.miduoke-pagination {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  align-items: center;
+  margin-top: 300px;
+  color: #344254;
+  font-size: 13px;
+}
+
+.miduoke-pagination button,
+.miduoke-pagination select,
+.miduoke-pagination input,
+.miduoke-pagination strong {
+  display: inline-grid;
+  place-items: center;
+  min-width: 38px;
+  height: 32px;
+  border: 1px solid #d7dce5;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #344254;
+  padding: 0 8px;
+  font: inherit;
+}
+
+.miduoke-pagination strong {
+  border-color: #0b66f6;
+  background: #0b66f6;
+  color: #ffffff;
+}
+
+.miduoke-pagination input {
+  width: 42px;
+}
+
+.miduoke-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.42);
+  padding: 24px;
+}
+
+.miduoke-modal {
+  width: min(760px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(16, 30, 54, 0.22);
+}
+
+.miduoke-preview-modal {
+  width: min(920px, 100%);
+}
+
+.miduoke-modal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  border-bottom: 1px solid #e5e9f0;
+  padding: 22px 24px 18px;
+}
+
+.miduoke-modal-head h2 {
+  margin: 0;
+  color: #061426;
+  font-size: 18px;
+}
+
+.miduoke-modal-head p {
+  margin: 8px 0 0;
+  color: #5c6f86;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.miduoke-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #d7dce5;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #40546c;
+  cursor: pointer;
+}
+
+.miduoke-code-block {
+  margin: 24px;
+  overflow: auto;
+  border: 1px solid #dbe3ee;
+  background: #f7fafc;
+  color: #1f344d;
+  padding: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.miduoke-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  border-top: 1px solid #e5e9f0;
+  padding: 16px 24px 22px;
+}
+
+.miduoke-modal-status {
+  margin: 14px 24px 0;
+  border: 1px solid #dbe3ee;
+  background: #f8fbff;
+  color: #435873;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.miduoke-modal-status.error {
+  border-color: #ffd1d1;
+  background: #fff7f7;
+  color: #b3261e;
+}
+
+.miduoke-website-preview {
+  position: relative;
+  min-height: 430px;
+  margin: 24px;
+  overflow: hidden;
+  border: 1px solid #dfe6ef;
+  background: linear-gradient(180deg, #f7faff 0%, #ffffff 46%);
+}
+
+.miduoke-website-preview nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  border-bottom: 1px solid #e3e9f1;
+  background: #ffffff;
+  padding: 16px 22px;
+  color: #53677f;
+}
+
+.miduoke-website-preview nav strong {
+  margin-right: auto;
+  color: #0d1c2e;
+}
+
+.miduoke-website-preview nav button,
+.miduoke-preview-link-entry {
+  border: 0;
+  border-radius: 4px;
+  background: #0b66f6;
+  color: #ffffff;
+  padding: 9px 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.miduoke-website-preview main {
+  max-width: 520px;
+  padding: 56px 42px;
+}
+
+.miduoke-website-preview h3 {
+  margin: 0 0 12px;
+  color: #10243c;
+  font-size: 26px;
+}
+
+.miduoke-website-preview p {
+  color: #5d7187;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.miduoke-preview-widget {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  width: 260px;
+  border: 1px solid #1677ff;
+  background: #ffffff;
+  box-shadow: 0 16px 34px rgba(18, 38, 63, 0.16);
+}
+
+.miduoke-preview-widget button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  background: #1677ff;
+  color: #ffffff;
+  padding: 12px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.miduoke-preview-widget div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+}
+
+.miduoke-preview-widget strong {
+  color: #182b42;
+  font-size: 14px;
+}
+
+.miduoke-preview-widget span {
+  color: #6a7d92;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.miduoke-config-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 22px 24px 0;
+}
+
+.miduoke-config-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.miduoke-config-form label.wide,
+.miduoke-config-form .wide {
+  grid-column: 1 / -1;
+}
+
+.miduoke-config-form span {
+  color: #4b5f76;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.miduoke-config-form input,
+.miduoke-config-form select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #d7dde7;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #22364e;
+  padding: 0 10px;
+  font: inherit;
+}
+
+.miduoke-config-form input[type="color"] {
+  padding: 4px;
+}
+
+.miduoke-guide-panel {
+  position: sticky;
+  top: 18px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px;
+}
+
+.miduoke-guide-panel p {
+  margin: 0;
+  color: #617086;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.miduoke-guide-panel ol {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: guide-step;
+}
+
+.miduoke-guide-panel li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: #34465c;
+  font-size: 13px;
+  line-height: 1.55;
+  counter-increment: guide-step;
+}
+
+.miduoke-guide-panel li::before {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #e8f1ff;
+  color: #0b66f6;
+  content: counter(guide-step);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.miduoke-guide-note {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #f2ddb8;
+  border-radius: 4px;
+  background: #fffaf0;
+  color: #754d11;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.miduoke-guide-note strong {
+  color: #754d11;
+}
+
+.miduoke-api-contract {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #eef2f7;
+  padding-top: 2px;
+}
+
+.miduoke-api-contract > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.miduoke-api-contract strong {
+  color: #10233d;
+  font-size: 14px;
+}
+
+.miduoke-api-contract small {
+  color: #8a98a9;
+  font-size: 12px;
+}
+
+.miduoke-api-contract dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.miduoke-api-contract dl > div {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.74fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #e5ebf3;
+  border-radius: 4px;
+  background: #fbfdff;
+  padding: 8px 9px;
+}
+
+.miduoke-api-contract dt,
+.miduoke-api-contract dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.miduoke-api-contract dt {
+  color: #0b63ce;
+  font-weight: 800;
+}
+
+.miduoke-api-contract dd {
+  color: #4f6074;
+}
+
+.miduoke-hook-list {
+  display: grid;
+  gap: 6px;
+}
+
+.miduoke-hook-list code {
+  display: block;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #f4f7fb;
+  color: #36506b;
+  padding: 7px 8px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1280px) {
+  .miduoke-channel-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .miduoke-guide-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 920px) {
+  .miduoke-channel-layout {
+    padding: 12px;
+  }
+
+  .miduoke-list-toolbar,
+  .miduoke-search-group {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .miduoke-search-group select,
+  .miduoke-search-group input,
+  .miduoke-search-group button {
+    width: 100%;
+  }
+}
