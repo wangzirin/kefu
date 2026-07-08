@@ -120,6 +120,14 @@ def _create_connector(
     webhook_path: str | None = None,
     signature_mode: str = "wecom_token_aeskey",
 ) -> dict:
+    default_public_config = public_config
+    if default_public_config is None and provider == "wecom":
+        default_public_config = {
+            "enterprise_name": "测试企业",
+            "corp_id": "ww_test_corp",
+            "agent_id": "1000001",
+            "callback_url": webhook_path or f"/api/webhooks/{provider}/channels/{channel_id}",
+        }
     res = client.post(
         f"/api/channels/{channel_id}/connector-config",
         headers=headers,
@@ -129,7 +137,7 @@ def _create_connector(
             "status": "ready",
             "display_name": display_name,
             "capabilities": capabilities or ["send_text", "delivery_receipt"],
-            "public_config": public_config or {"corp_id_placeholder": "configured_in_secret_store"},
+            "public_config": default_public_config or {"corp_id_placeholder": "configured_in_secret_store"},
             "webhook_path": webhook_path or f"/api/webhooks/{provider}/channels/{channel_id}",
             "signature_mode": signature_mode,
         },
@@ -247,6 +255,100 @@ def test_ai_service_status_and_connector_secrets_never_return_plaintext(client, 
     assert verification["status"] == "verified"
     assert verification["external_write_enabled"] is False
     assert verification["secret_included"] is False
+
+
+def test_connector_secrets_upsert_creates_missing_wecom_connector(client, monkeypatch, tmp_path) -> None:
+    tenant, token = _bootstrap_owner(
+        client,
+        slug="connector-secret-fallback",
+        email="connector-secret-fallback@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    monkeypatch.setattr(
+        "app.services.channel_secret_store._secret_store_path",
+        lambda: tmp_path / "local_channel_secrets.json",
+    )
+    channel_res = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        headers=headers,
+        json={"type": "wecom", "name": "企业微信", "reply_mode": "assist", "status": "active"},
+    )
+    assert channel_res.status_code == 201
+    channel = channel_res.json()
+
+    secret_res = client.post(
+        f"/api/channels/{channel['id']}/connector-secrets",
+        headers=headers,
+        json={
+            "secrets": {
+                "token": "fixed-wecom-token",
+                "encoding_aes_key": "abcdefghijklmnopqrstuvwxyzABCDEFG1234567",
+            }
+        },
+    )
+
+    assert secret_res.status_code == 200
+    secret_status = secret_res.json()
+    assert secret_status["provider"] == "wecom"
+    assert secret_status["status"] == "configured"
+    assert secret_status["field_status"] == {
+        "encoding_aes_key": "configured",
+        "token": "configured",
+    }
+
+    connector_res = client.get(f"/api/channels/{channel['id']}/connector-config", headers=headers)
+    assert connector_res.status_code == 200
+    connector = connector_res.json()
+    assert connector["provider"] == "wecom"
+    assert connector["signature_mode"] == "wecom_token_aeskey"
+    assert connector["public_config"]["credential_ref"] == f"local:channel_connector:{connector['id']}"
+
+
+def test_channel_connector_authorization_session_supports_qr_only_for_wechat_providers(client) -> None:
+    tenant, token = _bootstrap_owner(
+        client,
+        slug="connector-authorization-session",
+        email="connector-authorization-session@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    website_channel = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        headers=headers,
+        json={"type": "website", "name": "官网", "reply_mode": "assist", "status": "planned"},
+    ).json()
+    wechat_channel = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        headers=headers,
+        json={"type": "wechat_kf", "name": "微信客服", "reply_mode": "assist", "status": "planned"},
+    ).json()
+
+    website_qr = client.post(
+        f"/api/channels/{website_channel['id']}/connector-authorization",
+        headers=headers,
+        json={"provider": "website", "connect_mode": "qr"},
+    )
+    assert website_qr.status_code == 409
+
+    auth_res = client.post(
+        f"/api/channels/{wechat_channel['id']}/connector-authorization",
+        headers=headers,
+        json={"provider": "wechat_kf", "connect_mode": "qr", "redirect_uri": "http://127.0.0.1:5177/#channels"},
+    )
+    assert auth_res.status_code == 200
+    auth_body = auth_res.json()
+    assert auth_body["provider"] == "wechat_kf"
+    assert auth_body["connect_mode"] == "qr"
+    assert auth_body["status"] == "pending"
+    assert auth_body["secret_included"] is False
+    assert "state=" in auth_body["authorization_url"]
+    assert "should-not-return" not in str(auth_body)
+
+    connector_res = client.get(f"/api/channels/{wechat_channel['id']}/connector-config", headers=headers)
+    assert connector_res.status_code == 200
+    connector = connector_res.json()
+    assert connector["status"] == "auth_pending"
+    assert connector["public_config"]["authorization"]["status"] == "pending"
+    assert connector["external_write_enabled"] is False
 
 
 def test_public_website_widget_message_enters_conversation_inbox(client) -> None:

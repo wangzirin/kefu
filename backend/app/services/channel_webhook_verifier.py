@@ -235,7 +235,7 @@ def verify_channel_webhook_request(
             next_action="inspect_official_webhook_signature_or_secret_ref",
         )
     provider = normalize_provider(connector.provider)
-    if provider == "wecom":
+    if provider in {"wecom", "wechat_kf"}:
         return _verify_wecom(
             token=secret_resolution.material.token,
             raw_payload=raw_payload,

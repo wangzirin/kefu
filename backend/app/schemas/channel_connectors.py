@@ -54,6 +54,27 @@ class ChannelConnectorSecretStatusRead(BaseModel):
     secret_included: bool = False
 
 
+class ChannelConnectorAuthorizationStart(BaseModel):
+    provider: str = Field(min_length=1, max_length=80)
+    connect_mode: str = Field(default="qr", pattern="^(qr|manual)$")
+    redirect_uri: str = Field(default="", max_length=500)
+
+
+class ChannelConnectorAuthorizationRead(BaseModel):
+    tenant_id: int
+    channel_id: int
+    connector_id: int
+    provider: str
+    connect_mode: str
+    status: str
+    authorization_url: str
+    qr_payload: str
+    state: str
+    expires_at: datetime
+    next_steps: list[str]
+    secret_included: bool = False
+
+
 class ChannelConnectorVerificationRead(BaseModel):
     tenant_id: int
     channel_id: int

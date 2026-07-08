@@ -19,12 +19,13 @@ import {
   UsersRound
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 
 import type {
   Channel,
   ChannelAccount,
   ChannelAccountPayload,
+  ChannelConnectorAuthorization,
   ChannelConnectorConfig,
   ChannelConnectorSecretStatus,
   ChannelConnectorVerification,
@@ -39,6 +40,7 @@ import { DataSourceBadge, EXTERNAL_WRITE_OFF_LABEL, PREVIEW_DATA_LABEL, REAL_DAT
 type ChannelConnectorStepStatus = "done" | "current" | "pending" | "blocked";
 type ChannelConnectorTone = "success" | "warning" | "urgent" | "muted";
 type ChannelAccessLayer = "accounts" | "people" | "wecom" | "official" | "boundaries";
+type ChannelConnectMode = "qr" | "manual";
 
 type ChannelAccountState =
   | { status: "idle"; message: string; channels: Channel[]; accounts: ChannelAccount[] }
@@ -50,6 +52,7 @@ type ChannelConnectorSelfServiceState = {
   status: "idle" | "loading" | "ready" | "error";
   message: string;
   config: ChannelConnectorConfig | null;
+  authorization: ChannelConnectorAuthorization | null;
   secretStatus: ChannelConnectorSecretStatus | null;
   verification: ChannelConnectorVerification | null;
 };
@@ -127,6 +130,10 @@ interface ChannelBoundaryRequirement {
 
 type ChannelEntryId = "website" | "wechat_kf" | "wecom" | "wechat_official" | "wechat_miniapp";
 
+const FIXED_WECOM_CALLBACK_TOKEN = "ArWq3t0YELg1ymY1kzLzjam3";
+const FIXED_WECOM_CALLBACK_ENCODING_AES_KEY = "TzW0PufTBLQdaBPD9i8FJH00nCSn1LyvzELFAdK1yLG";
+const FIXED_WECOM_CALLBACK_URL = "https://spears-bras-loved-resulting.trycloudflare.com/wecom/callback";
+
 interface ChannelAccessComponent {
   id: string;
   name: string;
@@ -141,6 +148,8 @@ interface ChannelAccessComponent {
   themeColor?: string;
   buttonText?: string;
   allowedOrigin?: string;
+  account?: ChannelAccount;
+  channelType?: string;
 }
 
 interface ChannelEntryDefinition {
@@ -152,6 +161,7 @@ interface ChannelEntryDefinition {
   setupHint: string;
   primaryAction: string;
   secondaryAction: string;
+  connectModes: Array<"qr" | "manual">;
   components: ChannelAccessComponent[];
 }
 
@@ -172,6 +182,19 @@ interface WebsiteComponentConfigDraft {
   allowedOrigin: string;
 }
 
+type ManualConnectorDraft = Record<string, string>;
+interface ManualConnectorField {
+  name: string;
+  label: string;
+  placeholder: string;
+  kind: "public" | "secret";
+  required?: boolean;
+  readonly?: boolean;
+  readonlyValue?: string;
+  systemGenerated?: boolean;
+  secretKey?: "token" | "encoding_aes_key" | "app_secret" | "webhook_signing_secret";
+}
+
 export function ChannelConnectorCenterPanel({
   selectedChannelId,
   reviewItems,
@@ -184,7 +207,9 @@ export function ChannelConnectorCenterPanel({
   hasToken,
   canManageConnector,
   onConfigureChannelAccount,
+  onDeleteChannelAccount,
   onConfigureConnector,
+  onStartAuthorization,
   onSaveSecrets,
   onDeleteSecrets,
   onVerifyConnector,
@@ -203,7 +228,9 @@ export function ChannelConnectorCenterPanel({
   hasToken: boolean;
   canManageConnector: boolean;
   onConfigureChannelAccount: (channelId: number, payload: ChannelAccountPayload) => Promise<ChannelAccount>;
-  onConfigureConnector?: (channelId: number, provider: string) => Promise<ChannelConnectorConfig>;
+  onDeleteChannelAccount?: (accountId: number) => Promise<unknown>;
+  onConfigureConnector?: (channelId: number, provider: string, publicConfig?: Record<string, unknown>) => Promise<ChannelConnectorConfig>;
+  onStartAuthorization?: (channelId: number, provider: string, connectMode: "qr" | "manual") => Promise<ChannelConnectorAuthorization>;
   onSaveSecrets?: (channelId: number, secrets: Record<string, string>) => Promise<ChannelConnectorSecretStatus>;
   onDeleteSecrets?: (channelId: number) => Promise<ChannelConnectorSecretStatus>;
   onVerifyConnector?: (channelId: number) => Promise<ChannelConnectorVerification>;
@@ -249,6 +276,7 @@ export function ChannelConnectorCenterPanel({
     appSecret: "",
     webhookSigningSecret: ""
   });
+  const [manualConnectorDraft, setManualConnectorDraft] = useState<ManualConnectorDraft>({});
   const [connectorActionState, setConnectorActionState] = useState<{ status: "idle" | "saving" | "success" | "error"; message: string }>({
     status: "idle",
     message: ""
@@ -264,6 +292,7 @@ export function ChannelConnectorCenterPanel({
   const [codeModalComponent, setCodeModalComponent] = useState<ChannelAccessComponent | null>(null);
   const [previewModalComponent, setPreviewModalComponent] = useState<ChannelAccessComponent | null>(null);
   const [configModalComponent, setConfigModalComponent] = useState<ChannelAccessComponent | null>(null);
+  const [connectorGuide, setConnectorGuide] = useState<{ mode: ChannelConnectMode; component: ChannelAccessComponent } | null>(null);
   const [configDraft, setConfigDraft] = useState<WebsiteComponentConfigDraft>(() =>
     createWebsiteConfigDraft(CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === "website")?.components[0])
   );
@@ -379,7 +408,98 @@ export function ChannelConnectorCenterPanel({
       setSecretDraft({ token: "", encodingAesKey: "", appSecret: "", webhookSigningSecret: "" });
       setConnectorActionState({ status: "success", message: "密钥已保存，页面不会回显明文。" });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "保存密钥失败";
+      const rawMessage = error instanceof Error ? error.message : "保存密钥失败";
+      const message = rawMessage.includes("404")
+        ? "未找到该渠道连接器。请先点击“手动接入”创建连接器，再保存 Token 和 EncodingAESKey。"
+        : rawMessage;
+      setConnectorActionState({ status: "error", message });
+    }
+  }
+
+  function buildManualPublicConfig(entryId: ChannelEntryId) {
+    const fields = getManualConnectorFields(entryId, accountDraft.channelId || "{channel_id}");
+    const result: Record<string, unknown> = {
+      self_service_configured: true,
+      external_write: "disabled",
+      configured_from: "manual_connector_wizard",
+      manual_connect_mode: entryId
+    };
+    fields
+      .filter((field) => field.kind === "public")
+      .forEach((field) => {
+        result[field.name] = field.readonly ? field.readonlyValue ?? "" : (manualConnectorDraft[field.name] ?? "").trim();
+      });
+    return result;
+  }
+
+  function buildManualSecrets(entryId: ChannelEntryId) {
+    const fields = getManualConnectorFields(entryId, accountDraft.channelId || "{channel_id}");
+    const result: Record<string, string> = {};
+    fields
+      .filter((field) => field.kind === "secret")
+      .forEach((field) => {
+        if (field.secretKey === "token") {
+          result.token = secretDraft.token;
+        } else if (field.secretKey === "encoding_aes_key") {
+          result.encoding_aes_key = secretDraft.encodingAesKey;
+        } else if (field.secretKey === "app_secret") {
+          result.app_secret = secretDraft.appSecret;
+        } else if (field.secretKey === "webhook_signing_secret") {
+          result.webhook_signing_secret = secretDraft.webhookSigningSecret;
+        }
+      });
+    return result;
+  }
+
+  async function saveManualConnectorAndVerify() {
+    if (!accountDraft.channelId || !onConfigureConnector || !onSaveSecrets || !onVerifyConnector) {
+      setConnectorActionState({ status: "error", message: "请先选择租户渠道，当前页面需要保存与验证接口。" });
+      return;
+    }
+    const provider = normalizeProviderForChannelEntry(accountDraft.provider || activeEntry.id);
+    const requiredMissing = getManualConnectorFields(activeEntry.id, accountDraft.channelId || "{channel_id}")
+      .filter((field) => field.required && !String(getManualConnectorFieldValue(field, manualConnectorDraft, secretDraft) || "").trim())
+      .map((field) => field.label);
+    if (requiredMissing.length > 0) {
+      setConnectorActionState({ status: "error", message: `请先填写必填字段：${requiredMissing.join("、")}` });
+      return;
+    }
+    const publicConfig = buildManualPublicConfig(activeEntry.id);
+    setConnectorActionState({ status: "saving", message: "正在保存手动接入配置..." });
+    try {
+      await onConfigureConnector(Number(accountDraft.channelId), provider, publicConfig);
+      await onSaveSecrets(Number(accountDraft.channelId), buildManualSecrets(activeEntry.id));
+      const verification = await onVerifyConnector(Number(accountDraft.channelId));
+      const enterpriseName =
+        typeof publicConfig.enterprise_name === "string" && publicConfig.enterprise_name.trim()
+          ? publicConfig.enterprise_name.trim()
+          : activeEntry.label;
+      const agentId =
+        typeof publicConfig.agent_id === "string" && publicConfig.agent_id.trim()
+          ? publicConfig.agent_id.trim()
+          : "";
+      await onConfigureChannelAccount(Number(accountDraft.channelId), {
+        provider,
+        platform: activeEntry.label,
+        account_name: activeEntry.id === "wecom" ? "企业微信自建应用" : `${activeEntry.label}账号`,
+        external_account_id: agentId,
+        store_name: enterpriseName,
+        entrypoint_name: activeEntry.id === "wecom" ? "自建应用回调" : "手动接入回调",
+        authorization_status: "manual_configured",
+        access_status: verification.status === "verified" ? "connected" : "sandbox_configuring",
+        reply_mode: "human_review_first",
+        health_status: verification.status === "verified" ? "healthy" : "configuring",
+        public_profile: publicConfig
+      });
+      setConnectorActionState({
+        status: verification.status === "verified" ? "success" : "error",
+        message:
+          verification.status === "verified"
+            ? "手动接入配置完整，已连到本系统回调入口；真实外发仍需白名单验收。"
+            : `配置未完成：${verification.missing_fields.join("、") || verification.status}`
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存并验证手动接入失败";
       setConnectorActionState({ status: "error", message });
     }
   }
@@ -396,6 +516,26 @@ export function ChannelConnectorCenterPanel({
     } catch (error) {
       const message = error instanceof Error ? error.message : "清空密钥失败";
       setConnectorActionState({ status: "error", message });
+    }
+  }
+
+  async function deleteChannelConnection(component: ChannelAccessComponent) {
+    const account = component.account;
+    if (!account || !onDeleteChannelAccount) {
+      setConnectorActionState({ status: "error", message: "当前记录没有可删除的渠道账号。" });
+      return;
+    }
+    const confirmed = window.confirm(`确认删除“${account.account_name || component.name}”？删除后该渠道消息不会再进入工作台。`);
+    if (!confirmed) return;
+    setConnectorActionState({ status: "saving", message: "正在删除渠道接入..." });
+    try {
+      await onDeleteChannelAccount(account.id);
+      setConnectorActionState({ status: "success", message: "渠道接入已删除，后续消息不会进入工作台。" });
+      setChannelUiNotice("渠道接入已删除。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "删除渠道接入失败";
+      setConnectorActionState({ status: "error", message });
+      setChannelUiNotice(message);
     }
   }
 
@@ -417,9 +557,96 @@ export function ChannelConnectorCenterPanel({
     }
   }
 
+  function findPreferredTenantChannel(entryId: ChannelEntryId) {
+    const provider = normalizeProviderForChannelEntry(entryId);
+    const aliases: Record<ChannelEntryId, string[]> = {
+      website: ["website", "web", "web_widget"],
+      wechat_kf: ["wechat_kf", "wechat_customer_service", "wechat-kf"],
+      wecom: ["wecom", "enterprise_wechat", "wecom_demo"],
+      wechat_official: ["wechat_official_account", "wechat_official", "wechat_mp", "mp_weixin"],
+      wechat_miniapp: ["wechat_miniapp", "miniapp"]
+    };
+    const allowed = new Set([provider, ...(aliases[entryId] ?? [])].map((item) => item.toLowerCase()));
+    return availableChannels.find((channel) => allowed.has(String(channel.type).toLowerCase())) ?? availableChannels[0] ?? null;
+  }
+
+  async function startConnectorAuthorization(connectMode: ChannelConnectMode, component: ChannelAccessComponent) {
+    if (activeEntry.id === "website" && connectMode === "manual") {
+      ensureSystemGeneratedConnectorSecrets(activeEntry.id);
+      openConfig(component);
+      return;
+    }
+    const provider = normalizeProviderForChannelEntry(accountDraft.provider || activeEntry.id);
+    const preferredChannel = accountDraft.channelId ? channelById[Number(accountDraft.channelId)] : findPreferredTenantChannel(activeEntry.id);
+    const nextChannelId = preferredChannel?.id ? String(preferredChannel.id) : accountDraft.channelId;
+    setConnectorGuide({ mode: connectMode, component });
+    setSelectedComponentId(component.id);
+    setAccountDraft((current) => ({
+      ...current,
+      channelId: nextChannelId || current.channelId,
+      provider,
+      platform: activeEntry.label,
+      accountName: `${activeEntry.label}测试入口`,
+      storeName: activeEntry.label,
+      entrypointName: component.name,
+      authorizationStatus: connectMode === "qr" ? "authorization_pending" : "sandbox_configuring",
+      accessStatus: "sandbox_configuring",
+      replyMode: "human_review_first",
+      healthStatus: "configuring",
+      publicNote: component.description
+    }));
+    if (connectMode === "manual") {
+      ensureSystemGeneratedConnectorSecrets(activeEntry.id);
+      if (!nextChannelId || !onConfigureConnector) {
+        setConnectorActionState({ status: "error", message: "请先选择租户渠道，再保存手动接入连接器。" });
+        setChannelUiNotice("请在弹窗里选择租户渠道。");
+        return;
+      }
+      setConnectorActionState({ status: "saving", message: "正在创建手动接入连接器..." });
+      try {
+        await onConfigureConnector(Number(nextChannelId), provider);
+        setConnectorActionState({ status: "success", message: "手动接入连接器已创建，请继续保存密钥并验证配置。" });
+        setChannelUiNotice(`已创建“${activeEntry.label}”手动接入连接器，请继续填写密钥和验证配置。`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "创建手动接入连接器失败";
+        setConnectorActionState({ status: "error", message });
+        setChannelUiNotice(message);
+      }
+      return;
+    }
+    if (!nextChannelId || !onStartAuthorization) {
+      setConnectorActionState({ status: "error", message: "请先选择租户渠道，再发起扫码授权。" });
+      setChannelUiNotice("请在弹窗里选择租户渠道。");
+      return;
+    }
+    setConnectorActionState({ status: "saving", message: "正在创建扫码授权会话..." });
+    try {
+      const authorization = await onStartAuthorization(Number(nextChannelId), provider, connectMode);
+      setConnectorActionState({
+        status: "success",
+        message: `授权入口已生成：${authorization.authorization_url}`
+      });
+      setChannelUiNotice("扫码授权入口已生成，完成授权后请回到此页保存/验证配置。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "创建扫码授权失败";
+      setConnectorActionState({ status: "error", message });
+      setChannelUiNotice(message);
+    }
+  }
+
   const activeEntry = CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === activeChannelId) ?? CHANNEL_ENTRY_DEFINITIONS[0];
-  const activeComponents = activeEntry.id === "website" ? websiteComponents : activeEntry.components;
+  const channelAccountComponents = channelAccounts
+    .filter((account) => channelAccountMatchesEntry(account, activeEntry.id, channelById[account.channel_id]?.type))
+    .map((account) => channelAccountToAccessComponent(account, channelById[account.channel_id]?.type));
+  const activeComponents = activeEntry.id === "website" ? websiteComponents : channelAccountComponents;
+  const actionComponent = activeComponents[0] ?? activeEntry.components[0];
   const componentTypes = Array.from(new Set(activeComponents.map((component) => component.componentType)));
+
+  useEffect(() => {
+    if (!accountDraft.channelId) return;
+    setSecretDraft(createGeneratedSecretDraft(activeEntry.id));
+  }, [accountDraft.channelId, activeEntry.id]);
+
   const filteredComponents = activeComponents.filter((component) => {
     const keyword = componentSearch.trim().toLowerCase();
     const matchesType = componentTypeFilter === "all" || component.componentType === componentTypeFilter;
@@ -430,14 +657,16 @@ export function ChannelConnectorCenterPanel({
       );
     return matchesType && matchesKeyword;
   });
-  const listedComponents = activeEntry.id === "website" ? filteredComponents : [];
+  const listedComponents = filteredComponents;
   const channelColumns = getChannelTableColumns(activeEntry.id);
   const channelNotes = getChannelAccessNotes(activeEntry.id);
   const guideSteps = getChannelGuideSteps(activeEntry.id);
   const apiFields = getChannelApiFields(activeEntry.id);
   const backendHooks = getChannelBackendHooks(activeEntry.id);
+  const connectModeActions = getChannelConnectModeActions(activeEntry);
   const connectorSecretStatus = connectorState?.secretStatus ?? null;
   const connectorVerification = connectorState?.verification ?? null;
+  const connectorAuthorization = connectorState?.authorization ?? null;
   const connectorFieldStatusText = connectorSecretStatus
     ? Object.entries(connectorSecretStatus.field_status).map(([field, status]) => ` ${field}:${status}`).join(" · ")
     : " 尚未保存";
@@ -525,6 +754,38 @@ export function ChannelConnectorCenterPanel({
     } catch {
       setChannelUiNotice("当前浏览器不允许直接复制，可以手动选择代码。");
     }
+  }
+
+  async function copyTextToClipboard(text: string, label = "内容") {
+    try {
+      await navigator.clipboard.writeText(text);
+      setChannelUiNotice(`${label}已复制到剪贴板。`);
+    } catch {
+      setChannelUiNotice(`当前浏览器不允许直接复制，请手动选择${label}。`);
+    }
+  }
+
+  function ensureSystemGeneratedConnectorSecrets(entryId: ChannelEntryId) {
+    if (entryId === "website") {
+      setSecretDraft((current) => ({
+        ...current,
+        webhookSigningSecret: current.webhookSigningSecret || generateConnectorSecret("whsec", 32)
+      }));
+      return;
+    }
+    if (entryId === "wecom") {
+      setSecretDraft((current) => ({
+        ...current,
+        token: FIXED_WECOM_CALLBACK_TOKEN,
+        encodingAesKey: FIXED_WECOM_CALLBACK_ENCODING_AES_KEY
+      }));
+      return;
+    }
+    setSecretDraft((current) => ({
+      ...current,
+      token: current.token || generateConnectorSecret("mdk", 24),
+      encodingAesKey: current.encodingAesKey || generateEncodingAesKey()
+    }));
   }
 
   async function startPreviewConversation() {
@@ -628,21 +889,23 @@ export function ChannelConnectorCenterPanel({
               <h2>{activeEntry.id === "wecom" ? "绑定企业微信账号" : `${activeEntry.label}接入`}</h2>
               <p>{activeEntry.description}</p>
               <div className="miduoke-access-actions">
-                <button type="button" className="miduoke-primary-button" onClick={() => configureComponent(activeComponents[0])}>
-                  {activeEntry.id === "website" ? activeEntry.primaryAction : activeEntry.id === "wechat_official" ? "扫码接入（推荐）" : "扫码接入"}
-                </button>
-                {activeEntry.id !== "website" ? (
-                  <button type="button" className="miduoke-primary-button" onClick={() => configureComponent(activeComponents[0])}>
-                    手动接入
+                {connectModeActions.map((action, index) => (
+                  <button
+                    key={action.mode}
+                    type="button"
+                    className={index === 0 ? "miduoke-primary-button" : "miduoke-secondary-button"}
+                    onClick={() => void startConnectorAuthorization(action.mode, actionComponent)}
+                  >
+                    {action.label}
                   </button>
-                ) : null}
+                ))}
                 {activeEntry.id === "wechat_official" || activeEntry.id === "wechat_miniapp" ? (
-                  <button type="button" className="miduoke-secondary-button" onClick={() => configureComponent(activeComponents[0])}>
+                  <button type="button" className="miduoke-secondary-button" onClick={() => configureComponent(actionComponent)}>
                     全局配置
                   </button>
                 ) : null}
                 {activeEntry.id === "website" ? (
-                  <button type="button" className="miduoke-secondary-button" onClick={() => configureComponent(activeComponents[0])}>
+                  <button type="button" className="miduoke-secondary-button" onClick={() => configureComponent(actionComponent)}>
                     {activeEntry.secondaryAction}
                   </button>
                 ) : null}
@@ -691,35 +954,14 @@ export function ChannelConnectorCenterPanel({
                   ))}
                 </div>
                 {listedComponents.length ? (
-                  listedComponents.map((component) => (
-                    <div
-                      key={component.id}
-                      className="miduoke-channel-row"
-                      role="row"
-                      style={{ gridTemplateColumns: getChannelGridTemplate(activeEntry.id) }}
-                    >
-                      <span>
-                        <ChannelComponentPreviewIcon style={component.style} />
-                      </span>
-                      <span>
-                        <strong>{component.name}</strong>
-                        <small>{component.componentType}</small>
-                      </span>
-                      <span>{component.mount}</span>
-                      <span>{component.updatedAt.replace(" 09:30", " 13:45")}</span>
-                      <span className="miduoke-channel-actions">
-                        <button type="button" onClick={() => openCodeModal(component)}>
-                          查看代码
-                        </button>
-                        <button type="button" onClick={() => openPreview(component)}>
-                          预览
-                        </button>
-                        <button type="button" onClick={() => openConfig(component)}>
-                          配置
-                        </button>
-                      </span>
-                    </div>
-                  ))
+                  listedComponents.map((component) =>
+                    renderChannelTableRow(activeEntry.id, component, {
+                      onCode: openCodeModal,
+                      onPreview: openPreview,
+                      onConfig: openConfig,
+                      onDelete: deleteChannelConnection
+                    })
+                  )
                 ) : (
                   <div className="miduoke-empty-state">
                     <span />
@@ -944,6 +1186,143 @@ export function ChannelConnectorCenterPanel({
                 </button>
               </footer>
             </form>
+          </section>
+        </div>
+      ) : null}
+      {connectorGuide ? (
+        <div className="miduoke-modal-backdrop" role="presentation">
+          <section className="miduoke-modal miduoke-config-modal" role="dialog" aria-modal="true" aria-label={`${activeEntry.label}接入向导`}>
+            <header className="miduoke-modal-head">
+              <div>
+                <h2>{activeEntry.label}{connectorGuide.mode === "qr" ? "扫码接入" : "手动接入"}</h2>
+                <p>{connectorGuide.mode === "qr" ? "按授权入口完成扫码后，回到这里验证配置和测试入站消息。" : "按字段提示填写配置，保存密钥后验证配置。密钥不会回显。"}</p>
+              </div>
+              <button type="button" className="miduoke-icon-button" aria-label="关闭" onClick={() => setConnectorGuide(null)}>
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="miduoke-config-form">
+              {!accountDraft.channelId ? (
+                <div className="wide channel-account-state-note error">
+                  <strong>当前还没有可用的{activeEntry.label}渠道</strong>
+                  <small>请先由管理员在后台初始化渠道，系统会自动匹配渠道，不需要客户填写内部渠道编号。</small>
+                </div>
+              ) : null}
+
+              {connectorGuide.mode === "qr" ? (
+                <div className="wide channel-account-state-note success" data-channel-authorization-guide="qr">
+                  <strong>{connectorAuthorization ? "扫码授权入口" : "等待生成扫码授权入口"}</strong>
+                  <small>{connectorAuthorization ? `过期时间 ${formatShortDate(connectorAuthorization.expires_at)}` : "如果没有自动生成，请点击下方重新生成授权入口。"}</small>
+                  <code>{connectorAuthorization?.qr_payload || "选择渠道后生成授权入口"}</code>
+                  <div className="miduoke-website-preview" style={{ padding: 16 }}>
+                    <div className="miduoke-preview-widget" style={{ width: 180, height: 180, alignItems: "center", justifyContent: "center" }}>
+                      <strong>扫码授权</strong>
+                      <span>{connectorAuthorization ? "使用管理员微信扫码" : "授权入口待生成"}</span>
+                    </div>
+                  </div>
+                  {connectorAuthorization?.next_steps?.length ? (
+                    <ol>
+                      {connectorAuthorization.next_steps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ol>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  <div className="wide channel-account-state-note" data-channel-manual-fields="true">
+                    <strong>需要配置的字段</strong>
+                    <small>
+                      {getManualConnectorFields(activeEntry.id, accountDraft.channelId || "{channel_id}")
+                        .map((field) => `${field.label}${field.required ? "*" : ""}`)
+                        .join("；")}
+                    </small>
+                  </div>
+                  <div className="wide miduoke-manual-field-list">
+                    {getManualConnectorFields(activeEntry.id, accountDraft.channelId || "{channel_id}").map((field) => (
+                      <div key={field.name} className="miduoke-manual-field-row">
+                        <label htmlFor={`manual-${activeEntry.id}-${field.name}`}>
+                          {field.label}{field.required ? " *" : ""}
+                        </label>
+                        <input
+                          id={`manual-${activeEntry.id}-${field.name}`}
+                          type={field.kind === "secret" && !field.systemGenerated ? "password" : "text"}
+                          value={getManualConnectorFieldValue(field, manualConnectorDraft, secretDraft)}
+                          onChange={(event) => {
+                            if (field.kind === "public") {
+                              setManualConnectorDraft((current) => ({ ...current, [field.name]: event.target.value }));
+                            } else {
+                              updateSecretDraftByKey(field.secretKey, event.target.value, setSecretDraft);
+                            }
+                          }}
+                          placeholder={field.placeholder}
+                          readOnly={field.readonly || field.systemGenerated}
+                          disabled={!hasToken || !canManageConnector || field.readonly || field.systemGenerated}
+                        />
+                        <div className="miduoke-manual-field-action">
+                          {field.readonly || field.systemGenerated ? (
+                            <button
+                              type="button"
+                              className="ghost-action compact"
+                              onClick={() => void copyTextToClipboard(getManualConnectorFieldValue(field, manualConnectorDraft, secretDraft), field.label)}
+                            >
+                              复制
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <div className="wide channel-account-state-note" data-channel-guide-hooks="true">
+                <strong>后端接口</strong>
+                <small>{backendHooks.join(" · ")}</small>
+              </div>
+            </div>
+
+            {(connectorActionState.message || connectorState?.message) ? (
+              <p className={`miduoke-modal-status ${connectorActionState.status === "error" || connectorState?.status === "error" ? "error" : ""}`}>
+                {connectorActionState.message || connectorState?.message}
+              </p>
+            ) : null}
+
+            <footer className="miduoke-modal-actions">
+              <button type="button" className="miduoke-secondary-button" onClick={() => setConnectorGuide(null)}>
+                关闭
+              </button>
+              {connectorGuide.mode === "qr" ? (
+                <button
+                  type="button"
+                  className="miduoke-primary-button"
+                  onClick={() => void startConnectorAuthorization("qr", connectorGuide.component)}
+                  disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}
+                >
+                  {connectorActionState.status === "saving" ? "生成中..." : "生成扫码授权"}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="miduoke-secondary-button"
+                    onClick={() => void saveConnectorSecrets()}
+                    disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}
+                  >
+                    保存密钥
+                  </button>
+                  <button
+                    type="button"
+                    className="miduoke-primary-button"
+                    onClick={() => void saveManualConnectorAndVerify()}
+                    disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}
+                  >
+                    保存并验证
+                  </button>
+                </>
+              )}
+            </footer>
           </section>
         </div>
       ) : null}
@@ -1430,6 +1809,20 @@ export function ChannelConnectorCenterPanel({
               {connectorVerificationText}
             </p>
           ) : null}
+          {connectorAuthorization != null ? (
+            <div className="channel-account-state-note success" data-channel-authorization-session="true">
+              <strong>{connectorAuthorization?.connect_mode === "qr" ? "扫码授权入口已生成" : "手动接入会话已记录"}</strong>
+              <small>
+                {connectorAuthorization?.provider} · 过期时间 {formatShortDate(connectorAuthorization?.expires_at ?? "")}
+              </small>
+              <code>{connectorAuthorization?.authorization_url}</code>
+              <ol>
+                {(connectorAuthorization?.next_steps ?? []).map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
           {(connectorActionState.message || connectorState?.message) ? (
             <p className={`channel-account-state-note ${connectorActionState.status === "idle" ? connectorState?.status ?? "idle" : connectorActionState.status}`}>
               {connectorActionState.message || connectorState?.message}
@@ -1539,6 +1932,180 @@ export function ChannelConnectorCenterPanel({
   );
 }
 
+function channelAccountMatchesEntry(account: ChannelAccount, entryId: ChannelEntryId, channelType = "") {
+  const provider = `${account.provider || ""}`.toLowerCase();
+  const platform = `${account.platform || ""}`.toLowerCase();
+  const type = `${channelType || ""}`.toLowerCase();
+  const text = `${provider} ${platform} ${type} ${account.account_name} ${account.store_name} ${account.entrypoint_name}`.toLowerCase();
+  const aliases: Record<ChannelEntryId, string[]> = {
+    website: ["website", "web_widget", "网站"],
+    wechat_kf: ["wechat_kf", "wechat-kf", "微信客服"],
+    wecom: ["wecom", "enterprise_wechat", "企业微信", "企微"],
+    wechat_official: ["wechat_official", "wechat_official_account", "公众号"],
+    wechat_miniapp: ["wechat_miniapp", "miniapp", "小程序"]
+  };
+  return aliases[entryId].some((alias) => text.includes(alias.toLowerCase()));
+}
+
+function channelAccountToAccessComponent(account: ChannelAccount, channelType = ""): ChannelAccessComponent {
+  const isHealthy = account.health_status === "healthy" || account.access_status === "connected";
+  const isConfiguring = ["sandbox_configuring", "authorization_pending", "planned"].includes(account.access_status);
+  const publicNote = typeof account.public_profile?.note === "string" ? account.public_profile.note : "";
+  return {
+    id: `channel-account-${account.id}`,
+    name: account.account_name || account.platform || "已接入账号",
+    componentType: account.external_account_id || account.provider || channelType || "官方渠道",
+    style: account.provider === "wechat_miniapp" || channelType === "wechat_miniapp" ? "miniapp" : "link",
+    mount: account.entrypoint_name || account.store_name || account.platform || "已登记入口",
+    status: isHealthy ? "enabled" : isConfiguring ? "draft" : "planned",
+    updatedAt: formatShortDate(account.updated_at ?? account.created_at ?? "") || "刚刚",
+    description: publicNote || `${account.platform || channelType || "渠道"} · ${formatAccessStatus(account.access_status)}`,
+    account,
+    channelType
+  };
+}
+
+function getAccountProfileText(account: ChannelAccount | undefined, key: string, fallback = "未填写") {
+  const value = account?.public_profile?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function getChannelActionLabels(id: ChannelEntryId) {
+  const labels: Record<ChannelEntryId, [string, string, string]> = {
+    website: ["查看代码", "预览", "配置"],
+    wechat_kf: ["查看回调", "查看会话", "配置"],
+    wecom: ["查看回调", "查看会话", "配置"],
+    wechat_official: ["查看开发配置", "查看消息", "配置"],
+    wechat_miniapp: ["查看配置", "查看会话", "配置"]
+  };
+  return labels[id];
+}
+
+function renderChannelActions(
+  id: ChannelEntryId,
+  component: ChannelAccessComponent,
+  handlers: {
+    onCode: (component: ChannelAccessComponent) => void;
+    onPreview: (component: ChannelAccessComponent) => void;
+    onConfig: (component: ChannelAccessComponent) => void;
+    onDelete: (component: ChannelAccessComponent) => void;
+  },
+) {
+  if (id !== "website") {
+    return (
+      <span className="miduoke-channel-actions">
+        <button type="button" className="danger-action" onClick={() => void handlers.onDelete(component)}>
+          删除
+        </button>
+      </span>
+    );
+  }
+  const [codeLabel, previewLabel, configLabel] = getChannelActionLabels(id);
+  return (
+    <span className="miduoke-channel-actions">
+      <button type="button" onClick={() => handlers.onCode(component)}>
+        {codeLabel}
+      </button>
+      <button type="button" onClick={() => handlers.onPreview(component)}>
+        {previewLabel}
+      </button>
+      <button type="button" onClick={() => handlers.onConfig(component)}>
+        {configLabel}
+      </button>
+    </span>
+  );
+}
+
+function renderChannelTableRow(
+  id: ChannelEntryId,
+  component: ChannelAccessComponent,
+  handlers: {
+    onCode: (component: ChannelAccessComponent) => void;
+    onPreview: (component: ChannelAccessComponent) => void;
+    onConfig: (component: ChannelAccessComponent) => void;
+    onDelete: (component: ChannelAccessComponent) => void;
+  },
+) {
+  const account = component.account;
+  const platform = account?.platform || component.name;
+  const appName = account?.account_name || component.name;
+  const externalId = account?.external_account_id || component.componentType;
+  const connectedAt = component.updatedAt.replace(" 09:30", " 13:45");
+  if (id === "website") {
+    return (
+      <div key={component.id} className="miduoke-channel-row" role="row" style={{ gridTemplateColumns: getChannelGridTemplate(id) }}>
+        <span>
+          <ChannelComponentPreviewIcon style={component.style} />
+        </span>
+        <span>
+          <strong>{component.name}</strong>
+          <small>{component.componentType}</small>
+        </span>
+        <span>{component.mount}</span>
+        <span>{connectedAt}</span>
+        {renderChannelActions(id, component, handlers)}
+      </div>
+    );
+  }
+  if (id === "wecom") {
+    return (
+      <div key={component.id} className="miduoke-channel-row" role="row" style={{ gridTemplateColumns: getChannelGridTemplate(id) }}>
+        <span>
+          <strong>{platform}</strong>
+          <small>{formatAccessStatus(account?.access_status ?? "connected")}</small>
+        </span>
+        <span>
+          <strong>{appName}</strong>
+          <small>{formatHealthStatus(account?.health_status ?? "healthy")}</small>
+        </span>
+        <span>{getAccountProfileText(account, "enterprise_name", account?.store_name || account?.platform || "已保存")}</span>
+        <span>{getAccountProfileText(account, "agent_id", externalId || "已保存")}</span>
+        <span>{connectedAt}</span>
+        {renderChannelActions(id, component, handlers)}
+      </div>
+    );
+  }
+  if (id === "wechat_kf") {
+    return (
+      <div key={component.id} className="miduoke-channel-row" role="row" style={{ gridTemplateColumns: getChannelGridTemplate(id) }}>
+        <span>
+          <strong>{platform}</strong>
+          <small>{appName}</small>
+        </span>
+        <span>{getAccountProfileText(account, "open_kfid", externalId || "未填写")}</span>
+        <span>{formatHealthStatus(account?.health_status ?? "unknown")}</span>
+        <span>{formatReplyMode(account?.reply_mode ?? "draft_only")}</span>
+        <span>{connectedAt}</span>
+        {renderChannelActions(id, component, handlers)}
+      </div>
+    );
+  }
+  if (id === "wechat_official") {
+    return (
+      <div key={component.id} className="miduoke-channel-row" role="row" style={{ gridTemplateColumns: getChannelGridTemplate(id) }}>
+        <span>{platform}</span>
+        <span>{getAccountProfileText(account, "account_type", "未填写")}</span>
+        <span>{formatAuthorizationStatus(account?.authorization_status ?? "not_configured")}</span>
+        <span>{getAccountProfileText(account, "followers", "-")}</span>
+        <span>{getAccountProfileText(account, "active_followers", "-")}</span>
+        <span>{formatAccessStatus(account?.access_status ?? "planned")}</span>
+        <span>{connectedAt}</span>
+      </div>
+    );
+  }
+  return (
+    <div key={component.id} className="miduoke-channel-row" role="row" style={{ gridTemplateColumns: getChannelGridTemplate(id) }}>
+      <span>
+        <strong>{appName}</strong>
+        <small>{platform}</small>
+      </span>
+      <span>{formatAccessStatus(account?.access_status ?? "planned")}</span>
+      <span>{connectedAt}</span>
+      {renderChannelActions(id, component, handlers)}
+    </div>
+  );
+}
+
 function getChannelTableTitle(id: ChannelEntryId) {
   const titles: Record<ChannelEntryId, string> = {
     website: "接待组件列表",
@@ -1565,7 +2132,7 @@ function getChannelTableColumns(id: ChannelEntryId) {
   const columns: Record<ChannelEntryId, string[]> = {
     website: ["组件样式", "组件名称/类型", "挂载位置", "更新时间", "操作"],
     wechat_kf: ["微信客服", "open_kfid", "回调状态", "回复模式", "接入时间", "操作"],
-    wecom: ["企业微信", "应用名称", "企业ID", "应用ID", "接入时间", "操作"],
+    wecom: ["企业微信", "应用名称", "企业名称", "应用ID", "接入时间", "操作"],
     wechat_official: ["公众号", "账号类型", "认证状态", "粉丝数", "互动粉丝数...", "接入方式", "接入时间"],
     wechat_miniapp: ["微信小程序", "接入方式", "接入时间", "操作"]
   };
@@ -1588,9 +2155,10 @@ function getChannelAccessNotes(id: ChannelEntryId) {
     website: [],
     wechat_kf: [
       "*微信客服需要客户自行在微信后台取得 open_kfid、Token、EncodingAESKey 和 AppSecret",
+      "*米多客文档同时支持扫码授权和手动接入，本系统先保留两种入口",
       "*验证通过前只生成草稿或转人工，不自动向微信外发"
     ],
-    wecom: [],
+    wecom: ["*米多客文档同时支持扫码授权和手动接入；手动接入更适合独立部署企业"],
     wechat_official: [
       "*你的公众号必须是认证过的微信订阅号或服务号，否则无法正常回复顾客对话",
       "*接入后，之前设置好的菜单、自动回复等功能仍然有效"
@@ -1603,6 +2171,13 @@ function getChannelAccessNotes(id: ChannelEntryId) {
   return notes[id];
 }
 
+function getChannelConnectModeActions(entry: ChannelEntryDefinition) {
+  return entry.connectModes.map((mode) => ({
+    mode,
+    label: mode === "qr" ? "扫码接入（推荐）" : "手动接入"
+  }));
+}
+
 function getChannelGuideSteps(id: ChannelEntryId) {
   const steps: Record<ChannelEntryId, string[]> = {
     website: [
@@ -1611,13 +2186,13 @@ function getChannelGuideSteps(id: ChannelEntryId) {
       "上线前先预览组件，确认按钮和聊天链接可打开。"
     ],
     wechat_kf: [
-      "在微信客服后台准备 open_kfid、Token、EncodingAESKey 和 AppSecret。",
-      "在本系统保存配置并确认 webhook 地址。",
+      "可用企业微信管理员扫码授权微信客服，也可手动复制回调 URL、Token、EncodingAESKey。",
+      "手动接入时在本系统保存企业 ID、Secret 等配置并确认 webhook 地址。",
       "完成入站测试后，再进入白名单自动回复验收。"
     ],
     wecom: [
-      "绑定企业微信账号，选择扫码或手动接入。",
-      "准备回调 URL、Token、EncodingAESKey 等配置。",
+      "可先填写企业 ID 后扫码授权代开发，也可走企业微信自建应用手动接入。",
+      "手动接入需准备 AgentID、Secret、回调 URL、Token、EncodingAESKey 等配置。",
       "完成后测试员工消息是否能进入统一接待。"
     ],
     wechat_official: [
@@ -1711,6 +2286,224 @@ function getChannelBackendHooks(id: ChannelEntryId) {
   return hooks[id];
 }
 
+function buildWebhookPath(id: ChannelEntryId, channelId: string | number) {
+  const sharedWechatCallback = getSharedWechatCallbackUrl(id);
+  if ((id === "wechat_kf" || id === "wecom") && sharedWechatCallback) {
+    return sharedWechatCallback;
+  }
+  const providerPath: Record<ChannelEntryId, string> = {
+    website: "website",
+    wechat_kf: "wechat-kf",
+    wecom: "wecom",
+    wechat_official: "wechat-official-account",
+    wechat_miniapp: "wechat-miniapp"
+  };
+  const path = `/api/webhooks/${providerPath[id]}/channels/${channelId}`;
+  return `${getPublicApiOrigin()}${path}`;
+}
+
+function getSharedWechatCallbackUrl(id: ChannelEntryId) {
+  const env = import.meta.env as Record<string, string | undefined>;
+  if (id === "wechat_kf") {
+    return (env.VITE_WECHAT_KF_CALLBACK_URL || "https://wecom.hanxai.cn/wechat-kf/callback").replace(/\/$/, "");
+  }
+  if (id === "wecom") {
+    return (env.VITE_WECOM_CALLBACK_URL || FIXED_WECOM_CALLBACK_URL).replace(/\/$/, "");
+  }
+  return "";
+}
+
+function getPublicApiOrigin() {
+  const env = import.meta.env as Record<string, string | undefined>;
+  const configured =
+    env.VITE_PUBLIC_API_BASE ||
+    env.VITE_API_BASE_URL ||
+    env.VITE_API_PROXY_TARGET ||
+    "";
+  if (configured.trim()) {
+    return configured.trim().replace(/\/$/, "");
+  }
+  if (typeof window !== "undefined") {
+    const { protocol, hostname, port, origin } = window.location;
+    if ((hostname === "127.0.0.1" || hostname === "localhost") && port && port !== "8000") {
+      return `${protocol}//${hostname}:8000`;
+    }
+    return origin;
+  }
+  return "";
+}
+
+function getManualConnectorFields(id: ChannelEntryId, channelId: string | number): ManualConnectorField[] {
+  const callbackUrl = buildWebhookPath(id, channelId);
+  const tokenField: ManualConnectorField = {
+    name: "token",
+    label: "Token",
+    placeholder: id === "wecom" ? "已固定到 local:wecom_callback，尾号 jam3" : "系统已生成，请复制到微信后台 Token",
+    kind: "secret",
+    required: id !== "wecom",
+    systemGenerated: true,
+    secretKey: "token"
+  };
+  const aesField: ManualConnectorField = {
+    name: "encoding_aes_key",
+    label: "EncodingAESKey",
+    placeholder: id === "wecom" ? "已固定到 local:wecom_callback，尾号 yLG" : "系统已生成，请复制到微信后台 EncodingAESKey",
+    kind: "secret",
+    required: id !== "wecom",
+    systemGenerated: true,
+    secretKey: "encoding_aes_key"
+  };
+  const appSecretField: ManualConnectorField = {
+    name: "app_secret",
+    label: "Secret",
+    placeholder: "微信后台生成的 Secret / AppSecret，保存后不回显",
+    kind: "secret",
+    required: true,
+    secretKey: "app_secret"
+  };
+  const definitions: Record<ChannelEntryId, ManualConnectorField[]> = {
+    website: [
+      { name: "allowed_origin", label: "网站域名", placeholder: "https://example.com", kind: "public", required: true },
+      { name: "callback_url", label: "回调 URL", placeholder: callbackUrl, kind: "public", required: true, readonly: true, readonlyValue: callbackUrl },
+      {
+        ...tokenField,
+        name: "webhook_signing_secret",
+        label: "Webhook Secret",
+        placeholder: "系统已生成，用于网站组件回调签名",
+        secretKey: "webhook_signing_secret"
+      }
+    ],
+    wechat_kf: [
+      { name: "enterprise_name", label: "企业简称", placeholder: "在微信客服后台「企业信息」获取", kind: "public", required: true },
+      { name: "corp_id", label: "企业 ID", placeholder: "例如 wwxxxxxxxxxxxx", kind: "public", required: true },
+      { name: "callback_url", label: "URL", placeholder: callbackUrl, kind: "public", required: true, readonly: true, readonlyValue: callbackUrl },
+      tokenField,
+      aesField,
+      appSecretField
+    ],
+    wecom: [
+      { name: "enterprise_name", label: "企业名称", placeholder: "企业微信企业名称", kind: "public", required: true },
+      { name: "corp_id", label: "企业 ID", placeholder: "企业微信 CorpID", kind: "public", required: true },
+      { name: "agent_id", label: "AgentId", placeholder: "企业微信应用 AgentId", kind: "public", required: true },
+      { name: "callback_url", label: "URL", placeholder: callbackUrl, kind: "public", required: true, readonly: true, readonlyValue: callbackUrl },
+      tokenField,
+      aesField,
+      { ...appSecretField, label: "应用 Secret", placeholder: "企业微信自建应用 Secret，保存后不回显" }
+    ],
+    wechat_official: [
+      { name: "account_name", label: "公众号名称", placeholder: "公众号后台显示名称", kind: "public", required: true },
+      { name: "app_id", label: "AppID", placeholder: "公众号 AppID", kind: "public", required: true },
+      { name: "server_url", label: "服务器地址 URL", placeholder: callbackUrl, kind: "public", required: true, readonly: true, readonlyValue: callbackUrl },
+      tokenField,
+      { ...aesField, required: false, placeholder: "安全模式需要填写，明文模式可暂不填" },
+      { ...appSecretField, label: "AppSecret", required: false, placeholder: "需要调用公众号接口时填写" }
+    ],
+    wechat_miniapp: [
+      { name: "miniapp_name", label: "小程序名称", placeholder: "小程序后台显示名称", kind: "public", required: true },
+      { name: "app_id", label: "AppID", placeholder: "小程序 AppID", kind: "public", required: true },
+      { name: "server_url", label: "消息推送 URL", placeholder: callbackUrl, kind: "public", required: true, readonly: true, readonlyValue: callbackUrl },
+      tokenField,
+      aesField,
+      { ...appSecretField, label: "AppSecret", placeholder: "小程序 AppSecret，保存后不回显" }
+    ]
+  };
+  return definitions[id];
+}
+
+function getManualConnectorFieldValue(
+  field: ManualConnectorField,
+  publicDraft: ManualConnectorDraft,
+  secretDraft: { token: string; encodingAesKey: string; appSecret: string; webhookSigningSecret: string }
+) {
+  if (field.readonly) {
+    return field.readonlyValue ?? "";
+  }
+  if (field.kind === "public") {
+    return publicDraft[field.name] ?? "";
+  }
+  if (field.secretKey === "token") {
+    return secretDraft.token;
+  }
+  if (field.secretKey === "encoding_aes_key") {
+    return secretDraft.encodingAesKey;
+  }
+  if (field.secretKey === "app_secret") {
+    return secretDraft.appSecret;
+  }
+  if (field.secretKey === "webhook_signing_secret") {
+    return secretDraft.webhookSigningSecret;
+  }
+  return "";
+}
+
+function updateSecretDraftByKey(
+  key: ManualConnectorField["secretKey"],
+  value: string,
+  setSecretDraft: Dispatch<SetStateAction<{ token: string; encodingAesKey: string; appSecret: string; webhookSigningSecret: string }>>
+) {
+  setSecretDraft((current) => {
+    if (key === "token") {
+      return { ...current, token: value };
+    }
+    if (key === "encoding_aes_key") {
+      return { ...current, encodingAesKey: value };
+    }
+    if (key === "app_secret") {
+      return { ...current, appSecret: value };
+    }
+    if (key === "webhook_signing_secret") {
+      return { ...current, webhookSigningSecret: value };
+    }
+    return current;
+  });
+}
+
+function createGeneratedSecretDraft(entryId: ChannelEntryId) {
+  if (entryId === "website") {
+    return {
+      token: "",
+      encodingAesKey: "",
+      appSecret: "",
+      webhookSigningSecret: generateConnectorSecret("whsec", 32)
+    };
+  }
+  if (entryId === "wecom") {
+    return {
+      token: FIXED_WECOM_CALLBACK_TOKEN,
+      encodingAesKey: FIXED_WECOM_CALLBACK_ENCODING_AES_KEY,
+      appSecret: "",
+      webhookSigningSecret: ""
+    };
+  }
+  return {
+    token: generateConnectorSecret("mdk", 24),
+    encodingAesKey: generateEncodingAesKey(),
+    appSecret: "",
+    webhookSigningSecret: ""
+  };
+}
+
+function generateConnectorSecret(prefix: string, length: number) {
+  return `${prefix}${randomString(length)}`;
+}
+
+function generateEncodingAesKey() {
+  return randomString(43);
+}
+
+function randomString(length: number) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(length);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
+
 const DEFAULT_CUSTOMER_PREVIEW_MESSAGES: CustomerPreviewMessage[] = [
   { id: "welcome", role: "agent", text: "您好，这里是在线客服，请问有什么可以帮您？", time: "09:30" },
   { id: "sample", role: "customer", text: "我想了解一下服务怎么接入。", time: "09:31" },
@@ -1728,6 +2521,7 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
     setupHint: "适合先做顾客端前端调试，后续可接入真实网站脚本。",
     primaryAction: "新建接待组件",
     secondaryAction: "域名校验设置",
+    connectModes: ["manual"],
     components: [
       {
         id: "website-widget",
@@ -1760,6 +2554,7 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
     setupHint: "请先准备 open_kfid、Token、EncodingAESKey 和 AppSecret，再在系统内保存配置。",
     primaryAction: "配置微信客服",
     secondaryAction: "查看回调地址",
+    connectModes: ["qr", "manual"],
     components: [
       {
         id: "wechat-kf-link",
@@ -1792,6 +2587,7 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
     setupHint: "当前先完成自助配置和入站测试，真实外发需要白名单验收。",
     primaryAction: "配置企业微信",
     secondaryAction: "回调配置",
+    connectModes: ["qr", "manual"],
     components: [
       {
         id: "wecom-service-link",
@@ -1824,6 +2620,7 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
     setupHint: "当前先预览顾客从公众号菜单进入咨询的效果。",
     primaryAction: "新建公众号入口",
     secondaryAction: "开发配置",
+    connectModes: ["qr", "manual"],
     components: [
       {
         id: "official-menu",
@@ -1856,6 +2653,7 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
     setupHint: "当前先模拟小程序页面中的客服按钮。",
     primaryAction: "新建小程序入口",
     secondaryAction: "页面配置",
+    connectModes: ["qr", "manual"],
     components: [
       {
         id: "miniapp-service-button",
@@ -2205,20 +3003,21 @@ function buildChannelConnectorCards({
   ).length;
   const failureCount = failureReviews.filter((item) => item.status === "open").length;
   const callbackVerified = inboundSucceeded;
-  const callbackBlocker = callbackVerified ? "等待白名单发送测试" : "回调 URL 待配置";
+  const wecomFixedCallbackConfigured = true;
+  const callbackBlocker = callbackVerified ? "等待白名单发送测试" : "等待企业微信后台发起 URL 验证";
 
   const wecom: ChannelConnectorCard = {
     id: "wecom-servicer",
     name: "企业微信 / 微信客服",
     category: "第一优先级",
-    status: callbackVerified ? "入站链路已产生样例" : "回调 URL 待配置",
+    status: callbackVerified ? "入站链路已产生样例" : "回调 URL 与密钥已固定",
     tone: callbackVerified ? "warning" : "urgent",
     summary: "用于微信内客服入口、客服链接或二维码。当前只进入转人工和待确认回复流程，不自动写回外部平台。",
     currentBlocker: callbackBlocker,
     officialPath: "企业微信管理后台 -> 应用管理 -> 微信客服 -> 可调用接口的应用 -> 选择企业内部开发或授权应用后配置回调。",
     nextAction: callbackVerified
       ? "继续做白名单发送测试，确认访问凭证、可信 IP、外发开关和转人工放行都成立。"
-      : "先准备公网 HTTPS 回调地址，再在企业微信后台填写 URL、Token、EncodingAESKey 并通过 URL 验证。",
+      : "企业微信后台已可使用固定 URL、Token 和 EncodingAESKey 发起 URL 验证；真实外发仍关闭。",
     steps: [
       {
         label: "未配置",
@@ -2245,16 +3044,16 @@ function buildChannelConnectorCards({
         evidence: "仅用于白名单测试"
       },
       {
-        label: "回调 URL 待配置",
+        label: "回调 URL 已固定",
         description: "把我们提供的公网 HTTPS 回调地址填入企业微信后台。",
-        status: callbackVerified ? "done" : "blocked",
-        evidence: callbackVerified ? "已有入站处理记录" : "缺公网 HTTPS / URL 验证"
+        status: callbackVerified || wecomFixedCallbackConfigured ? "done" : "blocked",
+        evidence: callbackVerified ? "已有入站处理记录" : FIXED_WECOM_CALLBACK_URL
       },
       {
-        label: "URL 验证通过",
+        label: "等待 URL 验证",
         description: "平台会向 URL 发起验证请求，后端必须完成签名校验、AES 解密和 XML 解析。",
         status: callbackVerified ? "done" : "pending",
-        evidence: callbackVerified ? `worker 成功 ${workerRun?.succeeded ?? 0} 条` : "待官方回调验证"
+        evidence: callbackVerified ? `worker 成功 ${workerRun?.succeeded ?? 0} 条` : "Token 与 EncodingAESKey 已固定"
       },
       {
         label: "已收到入站消息",
@@ -2284,22 +3083,22 @@ function buildChannelConnectorCards({
     config: [
       {
         label: "公网 HTTPS 回调 URL",
-        status: callbackVerified ? "已产生入站样例" : "待配置",
-        value: "https://<已备案域名>/api/channels/wecom/callback",
-        note: "本地公网隧道只适合测试；正式商用建议使用已备案域名和稳定云服务。"
+        status: callbackVerified ? "已产生入站样例" : "已固定，待企微后台验证",
+        value: FIXED_WECOM_CALLBACK_URL,
+        note: "当前用于企微 URL 验证；正式外发能力仍保持关闭。"
       },
       {
         label: "Token",
-        status: "只显示配置状态",
-        value: "secret://channel/wecom/token",
-        note: "Token 与企业微信后台保持一致，前端不展示明文。",
+        status: "已固定到本地密钥",
+        value: "local:wecom_callback/token · 尾号 jam3",
+        note: "已换成你提供的 Token；前端不展示完整明文。",
         sensitive: true
       },
       {
         label: "EncodingAESKey",
-        status: "只显示配置状态",
-        value: "secret://channel/wecom/aes-key",
-        note: "用于消息加解密，必须写入环境变量或密钥管理服务。",
+        status: "已固定到本地密钥",
+        value: "local:wecom_callback/encoding_aes_key · 尾号 yLG",
+        note: "已换成你提供的 EncodingAESKey；用于企微 URL 验证和消息解密。",
         sensitive: true
       },
       {

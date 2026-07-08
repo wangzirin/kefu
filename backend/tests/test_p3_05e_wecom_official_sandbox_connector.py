@@ -106,6 +106,31 @@ def test_wecom_official_url_verification_rejects_bad_signature_without_secret_le
     assert encrypted_echo not in res.text
 
 
+def test_legacy_wecom_callback_url_verification_uses_env_without_connector(client, monkeypatch) -> None:
+    monkeypatch.setenv("WECOM_CALLBACK_TOKEN", TEST_TOKEN)
+    monkeypatch.setenv("WECOM_CALLBACK_ENCODING_AES_KEY", TEST_ENCODING_AES_KEY)
+    monkeypatch.setenv("WECOM_CALLBACK_RECEIVER_ID", TEST_RECEIVER_ID)
+
+    timestamp = _fresh_timestamp()
+    nonce = "p3-05e-legacy-url-verify"
+    encrypted_echo = _encrypt_wecom_text("legacy-wecom-echo-ok")
+    signature = _sha1_sorted_signature(TEST_TOKEN, timestamp, nonce, encrypted_echo)
+
+    res = client.get(
+        "/wecom/callback",
+        params={
+            "msg_signature": signature,
+            "timestamp": timestamp,
+            "nonce": nonce,
+            "echostr": encrypted_echo,
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.text == "legacy-wecom-echo-ok"
+    assert res.headers["content-type"].startswith("text/plain")
+
+
 def test_wecom_official_xml_message_decrypts_and_creates_trusted_inbound_message(client, monkeypatch) -> None:
     tenant, channel, token = _create_wecom_channel_and_env_connector(client, monkeypatch)
     headers = {"Authorization": f"Bearer {token}"}
@@ -166,3 +191,115 @@ def test_wecom_official_xml_message_decrypts_and_creates_trusted_inbound_message
     workflow_res = client.get(f"/api/tenants/{tenant['id']}/workflow-runs", headers=headers)
     assert workflow_res.status_code == 200
     assert workflow_res.json() == []
+
+
+def test_wechat_kf_manual_connector_url_verification_and_message_enters_service_desk(client, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        "app.services.channel_secret_store._secret_store_path",
+        lambda: tmp_path / "local_channel_secrets.json",
+    )
+    tenant, token = _bootstrap_owner(client, slug="wechat-kf-manual", email="wechat-kf-manual@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    channel_res = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        json={"type": "wechat_kf", "name": "微信客服", "reply_mode": "assist", "status": "active"},
+    )
+    assert channel_res.status_code == 201
+    channel = channel_res.json()
+    connector = _create_connector(
+        client,
+        channel["id"],
+        headers,
+        provider="wechat_kf",
+        display_name="微信客服",
+        capabilities=["receive_message", "draft_reply"],
+        public_config={
+            "enterprise_name": "测试企业",
+            "corp_id": TEST_RECEIVER_ID,
+            "callback_url": f"/api/webhooks/wechat-kf/channels/{channel['id']}",
+        },
+        webhook_path=f"/api/webhooks/wechat-kf/channels/{channel['id']}",
+        signature_mode="wechat_kf_token_aeskey",
+    )
+    assert connector["provider"] == "wechat_kf"
+    secret_res = client.post(
+        f"/api/channels/{channel['id']}/connector-secrets",
+        headers=headers,
+        json={
+            "secrets": {
+                "token": TEST_TOKEN,
+                "encoding_aes_key": TEST_ENCODING_AES_KEY,
+                "app_secret": "wechat-kf-secret-only-for-test",
+            }
+        },
+    )
+    assert secret_res.status_code == 200
+    assert secret_res.json()["status"] == "configured"
+    verify_res = client.post(f"/api/channels/{channel['id']}/connector-verification", headers=headers)
+    assert verify_res.status_code == 200
+    assert verify_res.json()["status"] == "verified"
+
+    timestamp = _fresh_timestamp()
+    nonce = "wechat-kf-url-verify"
+    encrypted_echo = _encrypt_wecom_text("wechat-kf-echo-ok")
+    signature = _sha1_sorted_signature(TEST_TOKEN, timestamp, nonce, encrypted_echo)
+    url_res = client.get(
+        "/wechat-kf/callback",
+        params={
+            "msg_signature": signature,
+            "timestamp": timestamp,
+            "nonce": nonce,
+            "echostr": encrypted_echo,
+        },
+    )
+    assert url_res.status_code == 200
+    assert url_res.text == "wechat-kf-echo-ok"
+
+    inner_xml = """
+<xml>
+  <ToUserName><![CDATA[kf-test-open-kfid]]></ToUserName>
+  <FromUserName><![CDATA[external-wechat-kf-user-001]]></FromUserName>
+  <CreateTime>1710000000</CreateTime>
+  <MsgType><![CDATA[text]]></MsgType>
+  <Content><![CDATA[我想咨询微信客服接入测试]]></Content>
+  <MsgId>wechat-kf-message-001</MsgId>
+</xml>
+""".strip()
+    encrypt = _encrypt_wecom_text(inner_xml)
+    timestamp = _fresh_timestamp()
+    nonce = "wechat-kf-message"
+    signature = _sha1_sorted_signature(TEST_TOKEN, timestamp, nonce, encrypt)
+    outer_xml = f"""
+<xml>
+  <ToUserName><![CDATA[{TEST_RECEIVER_ID}]]></ToUserName>
+  <Encrypt><![CDATA[{encrypt}]]></Encrypt>
+</xml>
+""".strip()
+    post_res = client.post(
+        f"/wechat-kf/callback?msg_signature={signature}&timestamp={timestamp}&nonce={nonce}",
+        content=outer_xml,
+        headers={"Content-Type": "application/xml"},
+    )
+    assert post_res.status_code == 202
+    event = post_res.json()
+    assert event["provider"] == "wechat_kf"
+    assert event["verification_status"] == "signature_validated"
+    assert event["signature_validated"] is True
+    assert event["parsed_event"]["status"] == "trusted_inbound_message_created"
+    assert event["parsed_event"]["trusted_message_creation"] is True
+    assert event["parsed_event"]["external_message_id"] == "wechat-kf-message-001"
+    assert event["external_write"] is False
+
+    detail = client.get(f"/api/conversations/{event['parsed_event']['conversation_id']}", headers=headers).json()
+    contents = [message["content"] for message in detail["messages"]]
+    assert "我想咨询微信客服接入测试" in contents
+    assert detail["messages"][0]["external_message_id"] == "wechat-kf-message-001"
+
+    receipts = client.get(f"/api/channels/{channel['id']}/delivery-receipts", headers=headers).json()
+    stored = receipts[0]["raw_payload"]
+    assert stored["webhook_intake"]["official_xml_decrypted"] is True
+    assert stored["webhook_intake"]["signature_values_stored"] is False
+    assert signature not in str(stored)
+    assert encrypt not in str(stored)
+    assert TEST_TOKEN not in str(stored)
+    assert TEST_ENCODING_AES_KEY not in str(stored)

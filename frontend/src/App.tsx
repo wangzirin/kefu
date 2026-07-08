@@ -151,6 +151,7 @@ import {
   rollbackKnowledgeDocumentPublication,
   rollbackStagedSignedUpdatePackage,
   searchKnowledgeDocuments,
+  startChannelConnectorAuthorization,
   syncKnowledgeGaps,
   stageSignedUpdatePackage,
   resetUserPassword,
@@ -165,6 +166,7 @@ import {
   updateTenantReplyStrategy,
   upsertChannelConnectorSecrets,
   deleteChannelConnectorSecrets,
+  deleteChannelAccountConnection,
   verifyChannelConnector,
   updateUserStatus,
   verifyLocalBackup,
@@ -178,6 +180,7 @@ import {
   type ChannelAccount,
   type ChannelAccountPayload,
   type ChannelConnectorConfig,
+  type ChannelConnectorAuthorization,
   type ChannelConnectorSecretStatus,
   type ChannelConnectorVerification,
   type ContactProfile,
@@ -338,6 +341,18 @@ const defaultPersonalSettings: UserPersonalSettings = {
   shortcut_send_key: "enter",
   service_notifications_enabled: true
 };
+
+function getConnectorSignatureMode(provider: string) {
+  const modes: Record<string, string> = {
+    website: "website_hmac_sha256",
+    wechat_kf: "wechat_kf_token_aeskey",
+    wecom: "wecom_token_aeskey",
+    wechat_official_account: "wechat_token",
+    wechat_official: "wechat_token",
+    wechat_miniapp: "wechat_token"
+  };
+  return modes[provider] ?? "wechat_token_aeskey";
+}
 
 function normalizePublicProfile(profile?: Partial<UserPublicProfile> | null): UserPublicProfile {
   return { ...defaultPublicProfile, ...(profile ?? {}) };
@@ -815,6 +830,7 @@ interface ChannelConnectorSelfServiceState {
   status: "idle" | "loading" | "ready" | "error";
   message: string;
   config: ChannelConnectorConfig | null;
+  authorization: ChannelConnectorAuthorization | null;
   secretStatus: ChannelConnectorSecretStatus | null;
   verification: ChannelConnectorVerification | null;
 }
@@ -1442,6 +1458,7 @@ export function App() {
     status: "idle",
     message: "等待选择渠道并配置连接器",
     config: null,
+    authorization: null,
     secretStatus: null,
     verification: null
   });
@@ -5326,7 +5343,32 @@ export function App() {
     return account;
   }
 
-  async function handleConfigureChannelConnector(channelId: number, provider: string) {
+  async function handleDeleteChannelAccountConnection(accountId: number) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
+      throw new Error("当前账号无权删除渠道接入");
+    }
+    setChannelConnectorSelfService((current) => ({ ...current, status: "loading", message: "正在删除渠道接入" }));
+    try {
+      const result = await deleteChannelAccountConnection(accountId, auth.token);
+      await refreshChannelAccounts(auth.user.tenant.id, auth.token);
+      await refreshConversationInbox(auth.user.tenant.id, auth.token, conversationInboxView, conversationInboxFilters);
+      setChannelConnectorSelfService((current) => ({
+        ...current,
+        config: result.connector_disabled ? null : current.config,
+        secretStatus: result.connector_disabled ? null : current.secretStatus,
+        verification: null,
+        status: "ready",
+        message: "渠道接入已删除，后续消息不会进入工作台。"
+      }));
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "删除渠道接入失败";
+      setChannelConnectorSelfService((current) => ({ ...current, status: "error", message }));
+      throw error;
+    }
+  }
+
+  async function handleConfigureChannelConnector(channelId: number, provider: string, publicConfig: Record<string, unknown> = {}) {
     if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
       throw new Error("当前账号无权配置渠道连接器");
     }
@@ -5354,10 +5396,11 @@ export function App() {
         public_config: {
           self_service_configured: true,
           external_write: "disabled",
-          configured_from: "channel_console"
+          configured_from: "channel_console",
+          ...publicConfig
         },
         webhook_path: `/api/webhooks/${normalizedProvider.replace(/_/g, "-")}/channels/${channelId}`,
-        signature_mode: normalizedProvider === "website" ? "website_token" : "wechat_token_aeskey"
+        signature_mode: getConnectorSignatureMode(normalizedProvider)
       });
       setChannelConnectorSelfService((current) => ({
         ...current,
@@ -5368,6 +5411,35 @@ export function App() {
       return config;
     } catch (error) {
       const message = error instanceof Error ? error.message : "保存连接器配置失败";
+      setChannelConnectorSelfService((current) => ({ ...current, status: "error", message }));
+      throw error;
+    }
+  }
+
+  async function handleStartChannelConnectorAuthorization(channelId: number, provider: string, connectMode: "qr" | "manual" = "qr") {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
+      throw new Error("当前账号无权发起渠道授权");
+    }
+    setChannelConnectorSelfService((current) => ({
+      ...current,
+      status: "loading",
+      message: connectMode === "qr" ? "正在创建扫码授权会话" : "正在记录手动接入会话"
+    }));
+    try {
+      const authorization = await startChannelConnectorAuthorization(channelId, auth.token, {
+        provider,
+        connect_mode: connectMode,
+        redirect_uri: typeof window !== "undefined" ? window.location.href : ""
+      });
+      setChannelConnectorSelfService((current) => ({
+        ...current,
+        authorization,
+        status: "ready",
+        message: connectMode === "qr" ? "扫码授权入口已生成，完成授权后请回到工作台验证配置。" : "手动接入会话已记录。"
+      }));
+      return authorization;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "创建渠道授权会话失败";
       setChannelConnectorSelfService((current) => ({ ...current, status: "error", message }));
       throw error;
     }
@@ -6402,6 +6474,7 @@ export function App() {
     handleCaptureEvaluationRunCaseFinalAnswerSample,
     handleCheckKnowledgeDocumentPublishGate,
     handleConfigureChannelAccount,
+    handleDeleteChannelAccountConnection,
     handleConfigureChannelConnector,
     handleConfirmDraft,
     handleConnectorPlan,
@@ -6472,6 +6545,7 @@ export function App() {
     handleSelectContactProfile,
     handleSendLocalConversationReply,
     handleStageSignedUpdatePackage,
+    handleStartChannelConnectorAuthorization,
     handleUpsertChannelConnectorSecrets,
     handleDeleteChannelConnectorSecrets,
     handleVerifyChannelConnector,

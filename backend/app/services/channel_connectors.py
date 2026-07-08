@@ -1,5 +1,8 @@
 from fastapi import HTTPException, status
 import hmac
+import os
+from datetime import timedelta
+from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -22,6 +25,7 @@ from app.models import (
 from app.models.foundation import utc_now
 from app.schemas.channel_connectors import (
     ChannelConnectorConfigCreate,
+    ChannelConnectorAuthorizationStart,
     ChannelAccountCreate,
     ChannelDeliveryReceiptCreate,
     ChannelWebhookEventCreate,
@@ -46,6 +50,7 @@ from app.services.wecom_callback_crypto import (
     decrypt_wecom_payload,
     extract_wecom_encrypt_from_xml,
     parse_wecom_xml,
+    wecom_sha1_signature,
 )
 from app.services.delivery_failures import attach_delivery_normalization_and_review
 from app.services.trusted_inbound_messages import TrustedInboundResult, create_trusted_inbound_message_if_ready
@@ -68,6 +73,36 @@ SENSITIVE_WEBHOOK_PAYLOAD_KEYS = (
     "app_secret",
     "encrypt",
 )
+
+QR_AUTHORIZATION_PROVIDERS = {"wechat_kf", "wecom", "wechat_official_account", "wechat_miniapp"}
+AUTHORIZATION_PROVIDER_PATHS = {
+    "wechat_kf": "wechat-kf",
+    "wecom": "wecom",
+    "wechat_official_account": "wechat-official-account",
+    "wechat_miniapp": "wechat-miniapp",
+}
+AUTHORIZATION_NEXT_STEPS = {
+    "wechat_kf": [
+        "使用企业微信管理员扫码授权微信客服。",
+        "授权完成后回到工作台保存 open_kfid 或客服链接信息。",
+        "发送一条测试消息，确认消息进入工作台后再开启白名单验收。",
+    ],
+    "wecom": [
+        "先确认企业 ID，再使用企业微信管理员扫码授权代开发。",
+        "授权完成后回到工作台确认应用与回调地址。",
+        "完成入站测试后再进入自动回复白名单验收。",
+    ],
+    "wechat_official_account": [
+        "使用公众号管理员扫码授权，并勾选客服消息、自定义菜单等必要权限。",
+        "授权完成后向公众号发送测试消息。",
+        "工作台收到消息后再配置自动回复和人工接待规则。",
+    ],
+    "wechat_miniapp": [
+        "使用小程序管理员扫码授权，并确认客服消息权限。",
+        "在小程序中添加客服按钮或 H5 咨询入口。",
+        "通过个人微信进入小程序发送测试消息。",
+    ],
+}
 
 
 def _public_secret_status(status_value: str) -> str:
@@ -167,6 +202,52 @@ def _get_channel_connector(db: Session, channel: Channel) -> ChannelConnector | 
     )
 
 
+def _default_provider_for_channel(channel: Channel, secrets: dict[str, str] | None = None) -> str:
+    provider = normalize_provider(channel.type or "")
+    if get_channel_provider_contract(provider) is not None:
+        return provider
+    secret_keys = {str(key) for key in (secrets or {}) if str(secrets.get(key, "")).strip()}
+    if {"token", "encoding_aes_key"}.issubset(secret_keys) or {"token", "encodingAESKey"}.issubset(secret_keys):
+        return "wecom"
+    return "website"
+
+
+def _create_default_connector_for_channel(
+    db: Session,
+    *,
+    channel: Channel,
+    provider: str,
+    principal: CurrentPrincipal,
+) -> ChannelConnector:
+    contract = get_channel_provider_contract(provider) or {}
+    webhook_path_template = str(contract.get("webhook_path_template") or f"/api/webhooks/{provider}/channels/{{channel_id}}")
+    connector = ChannelConnector(
+        tenant_id=channel.tenant_id,
+        channel_id=channel.id,
+        provider=provider,
+        mode="noop",
+        status="draft",
+        display_name=str(contract.get("display_name") or provider),
+        capabilities=["receive_inbound", "draft_reply"],
+        public_config={
+            "self_service_configured": True,
+            "external_write": "disabled",
+            "configured_from": "connector_secret_upsert_fallback",
+        },
+        webhook_path=webhook_path_template.format(channel_id=channel.id),
+        signature_mode=str(contract.get("default_signature_mode") or "not_configured"),
+        secret_status="not_configured",
+        external_write_enabled=False,
+        created_by_id=principal.user.id,
+        updated_by_id=principal.user.id,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    db.add(connector)
+    db.flush()
+    return connector
+
+
 def list_channel_provider_registry() -> list[dict]:
     return list_channel_provider_contracts()
 
@@ -224,6 +305,123 @@ def configure_channel_connector(
     return connector
 
 
+def _default_connector_config_for_authorization(*, channel: Channel, provider: str) -> ChannelConnectorConfigCreate:
+    contract = get_channel_provider_contract(provider) or {}
+    display_name = str(contract.get("display_name") or provider)
+    webhook_path_template = str(contract.get("webhook_path_template") or f"/api/webhooks/{provider}/channels/{{channel_id}}")
+    return ChannelConnectorConfigCreate(
+        provider=provider,
+        mode="noop",
+        status="draft",
+        display_name=display_name,
+        capabilities=["receive_inbound", "draft_reply", "self_service_authorization"],
+        public_config={
+            "self_service_configured": True,
+            "external_write": "disabled",
+            "configured_from": "channel_authorization",
+        },
+        webhook_path=webhook_path_template.format(channel_id=channel.id),
+        signature_mode=str(contract.get("default_signature_mode") or "not_configured"),
+    )
+
+
+def start_channel_connector_authorization(
+    db: Session,
+    *,
+    channel_id: int,
+    payload: ChannelConnectorAuthorizationStart,
+    principal: CurrentPrincipal,
+) -> dict:
+    channel = _require_channel_for_principal(db, channel_id, principal)
+    provider = normalize_provider(payload.provider)
+    contract = get_channel_provider_contract(provider)
+    if contract is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported channel provider")
+    if payload.connect_mode == "qr" and provider not in QR_AUTHORIZATION_PROVIDERS:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="provider does not support qr authorization")
+
+    connector = _get_channel_connector(db, channel)
+    if connector is None:
+        connector = ChannelConnector(
+            tenant_id=channel.tenant_id,
+            channel_id=channel.id,
+            created_by_id=principal.user.id,
+            created_at=utc_now(),
+        )
+        db.add(connector)
+        default_config = _default_connector_config_for_authorization(channel=channel, provider=provider)
+        connector.provider = default_config.provider
+        connector.mode = default_config.mode
+        connector.status = default_config.status
+        connector.display_name = default_config.display_name
+        connector.capabilities = default_config.capabilities
+        connector.public_config = _sanitize_public_config(default_config.public_config)
+        connector.webhook_path = default_config.webhook_path
+        connector.signature_mode = default_config.signature_mode
+        connector.secret_status = connector_secret_status(provider=provider, public_config=connector.public_config)
+        connector.external_write_enabled = False
+    elif normalize_provider(connector.provider) != provider:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="channel connector provider mismatch")
+
+    now = utc_now()
+    expires_at = now + timedelta(minutes=15)
+    state = f"auth_{channel.tenant_id}_{channel.id}_{uuid4().hex}"
+    provider_path = AUTHORIZATION_PROVIDER_PATHS.get(provider, provider.replace("_", "-"))
+    redirect_uri = payload.redirect_uri.strip()
+    authorization_url = (
+        f"/api/channel-authorizations/{provider_path}/start?"
+        f"channel_id={channel.id}&state={state}"
+    )
+    if redirect_uri:
+        authorization_url = f"{authorization_url}&redirect_uri={redirect_uri}"
+
+    public_config = dict(connector.public_config or {})
+    public_config["authorization"] = {
+        "connect_mode": payload.connect_mode,
+        "status": "pending",
+        "state": state,
+        "authorization_url": authorization_url,
+        "qr_payload": authorization_url,
+        "expires_at": expires_at.isoformat(),
+        "provider": provider,
+    }
+    connector.public_config = _sanitize_public_config(public_config)
+    connector.status = "auth_pending"
+    connector.updated_by_id = principal.user.id
+    connector.updated_at = now
+    db.flush()
+    add_audit_event(
+        db,
+        tenant_id=connector.tenant_id,
+        actor_id=principal.user.id,
+        action="channel_connector.authorization_started",
+        resource_type="channel_connector",
+        resource_id=str(connector.id),
+        payload={
+            "channel_id": channel.id,
+            "provider": provider,
+            "connect_mode": payload.connect_mode,
+            "state": state,
+            "secret_included": False,
+        },
+    )
+    db.commit()
+    return {
+        "tenant_id": connector.tenant_id,
+        "channel_id": channel.id,
+        "connector_id": connector.id,
+        "provider": provider,
+        "connect_mode": payload.connect_mode,
+        "status": "pending",
+        "authorization_url": authorization_url,
+        "qr_payload": authorization_url,
+        "state": state,
+        "expires_at": expires_at,
+        "next_steps": AUTHORIZATION_NEXT_STEPS.get(provider, ["按渠道向导完成授权后进行入站测试。"]),
+        "secret_included": False,
+    }
+
+
 def get_channel_connector(
     db: Session,
     *,
@@ -247,7 +445,12 @@ def upsert_channel_connector_secrets(
     channel = _require_channel_for_principal(db, channel_id, principal)
     connector = _get_channel_connector(db, channel)
     if connector is None:
-        raise HTTPException(status_code=404, detail="channel connector not found")
+        connector = _create_default_connector_for_channel(
+            db,
+            channel=channel,
+            provider=_default_provider_for_channel(channel, payload.secrets),
+            principal=principal,
+        )
     credential_ref = f"local:channel_connector:{connector.id}"
     field_status = save_local_connector_secrets(credential_ref=credential_ref, secrets=payload.secrets)
     public_config = dict(connector.public_config or {})
@@ -335,6 +538,9 @@ def verify_channel_connector_configuration(
     required = list((contract.get("verification_contract") or {}).get("required_secret_fields") or [])
     field_status = dict((connector.public_config or {}).get("secret_field_status") or {})
     missing = [field for field in required if field.replace("_optional", "") not in field_status and not field.endswith("_optional")]
+    required_public_fields = list((contract.get("verification_contract") or {}).get("required_public_fields") or [])
+    public_config = dict(connector.public_config or {})
+    missing.extend([field for field in required_public_fields if not str(public_config.get(field) or "").strip()])
     secret_resolution = resolve_webhook_secret_material(provider=connector.provider, public_config=connector.public_config)
     status_value = "verified" if not missing and secret_resolution.material is not None else "missing_configuration"
     connector.status = "ready" if status_value == "verified" else "draft"
@@ -448,6 +654,66 @@ def configure_channel_account(
     db.commit()
     db.refresh(account)
     return account
+
+
+def delete_channel_account_connection(
+    db: Session,
+    *,
+    account_id: int,
+    principal: CurrentPrincipal,
+) -> dict:
+    account = db.get(ChannelAccount, account_id)
+    if account is None or account.tenant_id != principal.tenant.id:
+        raise HTTPException(status_code=404, detail="channel account not found")
+    channel = db.get(Channel, account.channel_id)
+    connector = db.get(ChannelConnector, account.connector_id) if account.connector_id is not None else None
+    if connector is None and channel is not None:
+        connector = _get_channel_connector(db, channel)
+    now = utc_now()
+    connector_id = connector.id if connector is not None else None
+    channel_id = account.channel_id
+    provider = account.provider
+    if connector is not None and connector.tenant_id == account.tenant_id and connector.channel_id == account.channel_id:
+        credential_ref = str((connector.public_config or {}).get("credential_ref") or "").strip()
+        if credential_ref:
+            clear_local_connector_secrets(credential_ref=credential_ref)
+        connector.status = "disabled"
+        connector.secret_status = "missing"
+        connector.external_write_enabled = False
+        connector.public_config = {
+            **(connector.public_config or {}),
+            "credential_ref": "",
+            "secret_field_status": {},
+            "deleted_channel_account_id": account.id,
+            "disabled_reason": "channel_account_deleted",
+        }
+        connector.updated_by_id = principal.user.id
+        connector.updated_at = now
+    db.delete(account)
+    add_audit_event(
+        db,
+        tenant_id=principal.tenant.id,
+        actor_id=principal.user.id,
+        action="channel_account.deleted",
+        resource_type="channel_account",
+        resource_id=str(account_id),
+        payload={
+            "channel_id": channel_id,
+            "connector_id": connector_id,
+            "provider": provider,
+            "connector_disabled": connector is not None,
+            "external_write": False,
+        },
+    )
+    db.commit()
+    return {
+        "account_id": account_id,
+        "channel_id": channel_id,
+        "connector_id": connector_id,
+        "provider": provider,
+        "status": "deleted",
+        "connector_disabled": connector is not None,
+    }
 
 
 def _next_attempt_number(db: Session, draft_id: int) -> int:
@@ -667,9 +933,50 @@ def _require_webhook_connector(
     if channel is None:
         raise HTTPException(status_code=404, detail="channel webhook connector not found")
     connector = _get_channel_connector(db, channel)
-    if connector is None or normalize_provider(connector.provider) != contract["provider"]:
+    if connector is None or normalize_provider(connector.provider) != contract["provider"] or connector.status == "disabled":
         raise HTTPException(status_code=404, detail="channel webhook connector not found")
     return channel, connector, contract
+
+
+def _require_single_encrypted_wechat_connector(db: Session) -> tuple[Channel, ChannelConnector, dict]:
+    return _require_single_encrypted_wechat_connector_for_provider(db, providers=("wechat_kf", "wecom"))
+
+
+def _require_single_encrypted_wechat_connector_for_provider(
+    db: Session,
+    *,
+    providers: tuple[str, ...],
+) -> tuple[Channel, ChannelConnector, dict]:
+    connectors = list(
+        db.scalars(
+            select(ChannelConnector)
+            .where(ChannelConnector.provider.in_(list(providers)), ChannelConnector.status != "disabled")
+            .order_by(ChannelConnector.updated_at.desc(), ChannelConnector.id.desc())
+        ).all()
+    )
+    if not connectors:
+        raise HTTPException(status_code=404, detail="wechat callback connector not found")
+    ready_connectors = [connector for connector in connectors if connector.secret_status in {"configured", "local_configured", "env_configured"}]
+    candidates = ready_connectors or connectors
+    if len(candidates) > 1:
+        raise HTTPException(status_code=409, detail="multiple wechat callback connectors configured; use channel-specific callback url")
+    connector = candidates[0]
+    channel = db.get(Channel, connector.channel_id)
+    contract = get_channel_provider_contract(connector.provider)
+    if channel is None or contract is None:
+        raise HTTPException(status_code=404, detail="wechat callback connector not found")
+    return channel, connector, contract
+
+
+def _require_wechat_url_verification_query(query_params: dict[str, str]) -> None:
+    if not str(query_params.get("echostr", "")).strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="echostr is required")
+    missing = [key for key in ("msg_signature", "timestamp", "nonce") if not str(query_params.get(key, "")).strip()]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"missing wechat callback query fields: {', '.join(missing)}",
+        )
 
 
 def _webhook_verification_http_status(verification_status: str) -> int:
@@ -693,13 +1000,14 @@ def _resolve_connector_secret_or_raise(connector: ChannelConnector):
     return secret_resolution.material
 
 
-def verify_wecom_callback_url(
+def _verify_encrypted_wechat_callback_url(
     db: Session,
     *,
+    provider: str,
     channel_id: int,
     query_params: dict[str, str],
 ) -> str:
-    _channel, connector, _contract = _require_webhook_connector(db, provider="wecom", channel_id=channel_id)
+    _channel, connector, _contract = _require_webhook_connector(db, provider=provider, channel_id=channel_id)
     encrypted_echo = str(query_params.get("echostr", "")).strip()
     if not encrypted_echo:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="echostr is required")
@@ -711,7 +1019,7 @@ def verify_wecom_callback_url(
     if not verification.signature_validated:
         raise HTTPException(
             status_code=_webhook_verification_http_status(verification.status),
-            detail="wecom callback url verification failed",
+            detail=f"{provider} callback url verification failed",
         )
     material = _resolve_connector_secret_or_raise(connector)
     try:
@@ -723,16 +1031,129 @@ def verify_wecom_callback_url(
     except WecomCallbackCryptoError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="wecom callback url decrypt failed",
+            detail=f"{provider} callback url decrypt failed",
         ) from exc
     return decrypted.plaintext
 
 
-def _provider_event_id_from_wecom_payload(raw_payload: dict) -> str:
+def verify_wecom_callback_url(
+    db: Session,
+    *,
+    channel_id: int,
+    query_params: dict[str, str],
+) -> str:
+    return _verify_encrypted_wechat_callback_url(db, provider="wecom", channel_id=channel_id, query_params=query_params)
+
+
+def verify_wechat_kf_callback_url(
+    db: Session,
+    *,
+    channel_id: int,
+    query_params: dict[str, str],
+) -> str:
+    return _verify_encrypted_wechat_callback_url(db, provider="wechat_kf", channel_id=channel_id, query_params=query_params)
+
+
+def verify_default_encrypted_wechat_callback_url(
+    db: Session,
+    *,
+    query_params: dict[str, str],
+) -> str:
+    _require_wechat_url_verification_query(query_params)
+    if _has_env_only_wecom_callback_secret():
+        return _verify_env_only_wecom_callback_url(query_params=query_params)
+    try:
+        channel, connector, _contract = _require_single_encrypted_wechat_connector(db)
+        return _verify_encrypted_wechat_callback_url(
+            db,
+            provider=connector.provider,
+            channel_id=channel.id,
+            query_params=query_params,
+        )
+    except HTTPException as exc:
+        if exc.status_code not in {status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT}:
+            raise
+        return _verify_env_only_wecom_callback_url(query_params=query_params)
+
+
+def verify_default_wechat_kf_callback_url(
+    db: Session,
+    *,
+    query_params: dict[str, str],
+) -> str:
+    _require_wechat_url_verification_query(query_params)
+    channel, connector, _contract = _require_single_encrypted_wechat_connector_for_provider(db, providers=("wechat_kf",))
+    return _verify_encrypted_wechat_callback_url(
+        db,
+        provider=connector.provider,
+        channel_id=channel.id,
+        query_params=query_params,
+    )
+
+
+def _has_env_only_wecom_callback_secret() -> bool:
+    local_resolution = resolve_webhook_secret_material(
+        provider="wecom",
+        public_config={"credential_ref": "local:wecom_callback"},
+    )
+    if local_resolution.material is not None:
+        return True
+    for prefix in ("WECOM_CALLBACK", "WECOM", "WECOM_SANDBOX"):
+        token = os.getenv(f"{prefix}_TOKEN", "").strip() or os.getenv(f"{prefix}_CALLBACK_TOKEN", "").strip()
+        encoding_aes_key = (
+            os.getenv(f"{prefix}_ENCODING_AES_KEY", "").strip()
+            or os.getenv(f"{prefix}_ENCODINGAESKEY", "").strip()
+            or os.getenv(f"{prefix}_AES_KEY", "").strip()
+        )
+        if token and encoding_aes_key:
+            return True
+    return False
+
+
+def _resolve_env_only_wecom_callback_secret():
+    for credential_ref in ("env:WECOM_CALLBACK", "env:WECOM", "env:WECOM_SANDBOX", "local:wecom_callback"):
+        resolution = resolve_webhook_secret_material(
+            provider="wecom",
+            public_config={"credential_ref": credential_ref},
+        )
+        if resolution.material is not None:
+            return resolution.material
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "wecom callback secret is not configured; set WECOM_CALLBACK_TOKEN and "
+            "WECOM_CALLBACK_ENCODING_AES_KEY, or configure a channel connector"
+        ),
+    )
+
+
+def _verify_env_only_wecom_callback_url(*, query_params: dict[str, str]) -> str:
+    material = _resolve_env_only_wecom_callback_secret()
+    encrypted_echo = str(query_params.get("echostr", "")).strip()
+    expected_signature = wecom_sha1_signature(
+        token=material.token,
+        timestamp=str(query_params.get("timestamp", "")),
+        nonce=str(query_params.get("nonce", "")),
+        encrypted_text=encrypted_echo,
+    )
+    if not hmac.compare_digest(expected_signature, str(query_params.get("msg_signature", "")).strip().lower()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="wecom callback url verification failed")
+    try:
+        decrypted = decrypt_wecom_payload(
+            encrypted_text=encrypted_echo,
+            encoding_aes_key=material.encoding_aes_key,
+            expected_receiver_id=material.receiver_id,
+        )
+    except WecomCallbackCryptoError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="wecom callback url decrypt failed") from exc
+    return decrypted.plaintext
+
+
+def _provider_event_id_from_wechat_payload(raw_payload: dict) -> str:
     return _pick_first_string(raw_payload, ("EventID", "event_id", "MsgId", "MsgID"))
 
 
-def _event_type_from_wecom_payload(raw_payload: dict) -> str:
+def _event_type_from_wechat_payload(raw_payload: dict) -> str:
     if _pick_first_string(raw_payload, ("MsgType", "msgtype")).lower() == "text":
         return "message"
     if _pick_first_string(raw_payload, ("Content", "content")):
@@ -742,19 +1163,20 @@ def _event_type_from_wecom_payload(raw_payload: dict) -> str:
     return "message"
 
 
-def receive_wecom_official_xml_webhook(
+def _receive_encrypted_wechat_xml_webhook(
     db: Session,
     *,
+    provider: str,
     channel_id: int,
     xml_body: str,
     query_params: dict[str, str],
 ) -> dict:
-    _channel, connector, _contract = _require_webhook_connector(db, provider="wecom", channel_id=channel_id)
+    _channel, connector, _contract = _require_webhook_connector(db, provider=provider, channel_id=channel_id)
     try:
         outer_payload = parse_wecom_xml(xml_body)
         encrypt = extract_wecom_encrypt_from_xml(xml_body)
     except WecomCallbackCryptoError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="wecom xml payload is invalid") from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{provider} xml payload is invalid") from exc
 
     verification = verify_channel_webhook_request(
         connector=connector,
@@ -764,7 +1186,7 @@ def receive_wecom_official_xml_webhook(
     if not verification.signature_validated:
         raise HTTPException(
             status_code=_webhook_verification_http_status(verification.status),
-            detail="wecom xml webhook signature verification failed",
+            detail=f"{provider} xml webhook signature verification failed",
         )
     material = _resolve_connector_secret_or_raise(connector)
     try:
@@ -775,7 +1197,7 @@ def receive_wecom_official_xml_webhook(
         )
         raw_payload = parse_wecom_xml(decrypted.plaintext)
     except WecomCallbackCryptoError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="wecom xml decrypt failed") from exc
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{provider} xml decrypt failed") from exc
 
     raw_payload = {
         **raw_payload,
@@ -787,17 +1209,81 @@ def receive_wecom_official_xml_webhook(
         ),
     }
     payload = ChannelWebhookEventCreate(
-        event_type=_event_type_from_wecom_payload(raw_payload),
+        event_type=_event_type_from_wechat_payload(raw_payload),
         external_message_id=_pick_first_string(raw_payload, ("MsgID", "MsgId")),
         delivery_status="received",
-        provider_event_id=_provider_event_id_from_wecom_payload(raw_payload),
+        provider_event_id=_provider_event_id_from_wechat_payload(raw_payload),
         raw_payload=raw_payload,
     )
     return receive_channel_webhook_event(
         db,
-        provider="wecom",
+        provider=provider,
         channel_id=channel_id,
         payload=payload,
+        query_params=query_params,
+    )
+
+
+def receive_wecom_official_xml_webhook(
+    db: Session,
+    *,
+    channel_id: int,
+    xml_body: str,
+    query_params: dict[str, str],
+) -> dict:
+    return _receive_encrypted_wechat_xml_webhook(
+        db,
+        provider="wecom",
+        channel_id=channel_id,
+        xml_body=xml_body,
+        query_params=query_params,
+    )
+
+
+def receive_wechat_kf_xml_webhook(
+    db: Session,
+    *,
+    channel_id: int,
+    xml_body: str,
+    query_params: dict[str, str],
+) -> dict:
+    return _receive_encrypted_wechat_xml_webhook(
+        db,
+        provider="wechat_kf",
+        channel_id=channel_id,
+        xml_body=xml_body,
+        query_params=query_params,
+    )
+
+
+def receive_default_encrypted_wechat_xml_webhook(
+    db: Session,
+    *,
+    xml_body: str,
+    query_params: dict[str, str],
+) -> dict:
+    channel, connector, _contract = _require_single_encrypted_wechat_connector(db)
+    return _receive_encrypted_wechat_xml_webhook(
+        db,
+        provider=connector.provider,
+        channel_id=channel.id,
+        xml_body=xml_body,
+        query_params=query_params,
+    )
+
+
+def receive_default_wechat_kf_xml_webhook(
+    db: Session,
+    *,
+    xml_body: str,
+    query_params: dict[str, str],
+) -> dict:
+    channel, connector, _contract = _require_single_encrypted_wechat_connector_for_provider(db, providers=("wechat_kf",))
+    return _receive_encrypted_wechat_xml_webhook(
+        db,
+        provider=connector.provider,
+        channel_id=channel.id,
+        xml_body=xml_body,
         query_params=query_params,
     )
 
@@ -882,6 +1368,10 @@ def receive_channel_webhook_event(
         "provider_event_id": provider_event_id,
         "raw_payload_keys": sorted(payload.raw_payload.keys()),
     }
+    ai_cycle_result = None
+    if trusted_inbound.trusted_message_id is not None and trusted_inbound.idempotency_status == "created":
+        ai_cycle_result = process_inbound_message_for_ai(db, message_id=trusted_inbound.trusted_message_id)
+        parsed_event["ai_cycle_result"] = ai_cycle_result
     stored_payload = {
         "payload": _sanitize_webhook_payload(payload.raw_payload),
         "webhook_intake": {

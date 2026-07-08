@@ -9,6 +9,8 @@ from app.models import ChannelAccount, ChannelConnector, ChannelDeliveryReceipt,
 from app.schemas.channel_connectors import (
     ChannelAccountCreate,
     ChannelAccountRead,
+    ChannelConnectorAuthorizationRead,
+    ChannelConnectorAuthorizationStart,
     ChannelConnectorConfigCreate,
     ChannelConnectorConfigRead,
     ChannelConnectorSecretStatusRead,
@@ -31,22 +33,31 @@ from app.services.channel_connectors import (
     configure_channel_connector,
     create_channel_delivery_receipt,
     create_connector_send_plan,
+    delete_channel_account_connection,
     get_channel_connector,
     get_online_receipt_quality_summary,
     list_channel_accounts,
     list_channel_delivery_receipts,
     list_channel_provider_registry,
     list_website_widget_conversation_messages,
+    receive_default_encrypted_wechat_xml_webhook,
+    receive_default_wechat_kf_xml_webhook,
     receive_channel_webhook_event,
     receive_website_widget_message,
     receive_wecom_official_xml_webhook,
+    receive_wechat_kf_xml_webhook,
+    start_channel_connector_authorization,
     delete_channel_connector_secrets,
     upsert_channel_connector_secrets,
+    verify_default_encrypted_wechat_callback_url,
+    verify_default_wechat_kf_callback_url,
     verify_channel_connector_configuration,
     verify_wecom_callback_url,
+    verify_wechat_kf_callback_url,
 )
 
 router = APIRouter(prefix="/api", tags=["channel-connectors"])
+legacy_router = APIRouter(tags=["channel-connectors"])
 
 CHANNEL_READ_PERMISSION = "channel.read"
 CHANNEL_CONNECTOR_MANAGE_PERMISSION = "channel.connector.manage"
@@ -87,6 +98,15 @@ def configure_tenant_channel_account(
     return configure_channel_account(db, channel_id=channel_id, payload=payload, principal=principal)
 
 
+@router.delete("/channel-accounts/{account_id}")
+def delete_tenant_channel_account_connection(
+    account_id: int,
+    principal: CurrentPrincipal = Depends(require_permission(CHANNEL_CONNECTOR_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> dict:
+    return delete_channel_account_connection(db, account_id=account_id, principal=principal)
+
+
 @router.post(
     "/channels/{channel_id}/connector-config",
     response_model=ChannelConnectorConfigRead,
@@ -108,6 +128,16 @@ def get_tenant_channel_connector(
     db: Session = Depends(get_db),
 ) -> ChannelConnector:
     return get_channel_connector(db, channel_id=channel_id, principal=principal)
+
+
+@router.post("/channels/{channel_id}/connector-authorization", response_model=ChannelConnectorAuthorizationRead)
+def start_tenant_channel_connector_authorization(
+    channel_id: int,
+    payload: ChannelConnectorAuthorizationStart,
+    principal: CurrentPrincipal = Depends(require_permission(CHANNEL_CONNECTOR_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> dict:
+    return start_channel_connector_authorization(db, channel_id=channel_id, payload=payload, principal=principal)
 
 
 @router.post("/channels/{channel_id}/connector-secrets", response_model=ChannelConnectorSecretStatusRead)
@@ -236,6 +266,132 @@ def verify_wecom_official_callback_url(
     return verify_wecom_callback_url(
         db,
         channel_id=channel_id,
+        query_params=dict(request.query_params),
+    )
+
+
+@router.post(
+    "/webhooks/wechat-kf/channels/{channel_id}",
+    response_model=ChannelWebhookEventRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def receive_wechat_kf_xml_channel_webhook(
+    channel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    content_type = request.headers.get("content-type", "").lower()
+    if "json" in content_type:
+        payload = ChannelWebhookEventCreate.model_validate(await request.json())
+        return receive_channel_webhook_event(
+            db,
+            provider="wechat_kf",
+            channel_id=channel_id,
+            payload=payload,
+            query_params=dict(request.query_params),
+        )
+    raw_body = (await request.body()).decode("utf-8")
+    return receive_wechat_kf_xml_webhook(
+        db,
+        channel_id=channel_id,
+        xml_body=raw_body,
+        query_params=dict(request.query_params),
+    )
+
+
+@router.get("/webhooks/wechat-kf/channels/{channel_id}", response_class=PlainTextResponse)
+def verify_wechat_kf_official_callback_url(
+    channel_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> str:
+    return verify_wechat_kf_callback_url(
+        db,
+        channel_id=channel_id,
+        query_params=dict(request.query_params),
+    )
+
+
+@router.post(
+    "/wecom/callback",
+    response_model=ChannelWebhookEventRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def receive_default_wecom_compatible_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    raw_body = (await request.body()).decode("utf-8")
+    return receive_default_encrypted_wechat_xml_webhook(
+        db,
+        xml_body=raw_body,
+        query_params=dict(request.query_params),
+    )
+
+
+@router.get("/wecom/callback", response_class=PlainTextResponse)
+def verify_default_wecom_compatible_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> str:
+    return verify_default_encrypted_wechat_callback_url(
+        db,
+        query_params=dict(request.query_params),
+    )
+
+
+@legacy_router.post(
+    "/wecom/callback",
+    response_model=ChannelWebhookEventRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def receive_legacy_wecom_compatible_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    raw_body = (await request.body()).decode("utf-8")
+    return receive_default_encrypted_wechat_xml_webhook(
+        db,
+        xml_body=raw_body,
+        query_params=dict(request.query_params),
+    )
+
+
+@legacy_router.get("/wecom/callback", response_class=PlainTextResponse)
+def verify_legacy_wecom_compatible_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> str:
+    return verify_default_encrypted_wechat_callback_url(
+        db,
+        query_params=dict(request.query_params),
+    )
+
+
+@legacy_router.post(
+    "/wechat-kf/callback",
+    response_model=ChannelWebhookEventRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def receive_legacy_wechat_kf_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    raw_body = (await request.body()).decode("utf-8")
+    return receive_default_wechat_kf_xml_webhook(
+        db,
+        xml_body=raw_body,
+        query_params=dict(request.query_params),
+    )
+
+
+@legacy_router.get("/wechat-kf/callback", response_class=PlainTextResponse)
+def verify_legacy_wechat_kf_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> str:
+    return verify_default_wechat_kf_callback_url(
+        db,
         query_params=dict(request.query_params),
     )
 

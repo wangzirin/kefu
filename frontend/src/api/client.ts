@@ -2620,6 +2620,21 @@ export interface ChannelConnectorConfig {
   updated_at: string | null;
 }
 
+export interface ChannelConnectorAuthorization {
+  tenant_id: number;
+  channel_id: number;
+  connector_id: number;
+  provider: string;
+  connect_mode: "qr" | "manual";
+  status: string;
+  authorization_url: string;
+  qr_payload: string;
+  state: string;
+  expires_at: string;
+  next_steps: string[];
+  secret_included: boolean;
+}
+
 export interface ChannelAccount {
   id: number;
   tenant_id: number;
@@ -2656,6 +2671,15 @@ export interface ChannelAccountPayload {
   reply_mode?: string;
   health_status?: string;
   public_profile?: Record<string, unknown>;
+}
+
+export interface ChannelAccountDeleteResult {
+  account_id: number;
+  channel_id: number;
+  connector_id: number | null;
+  provider: string;
+  status: string;
+  connector_disabled: boolean;
 }
 
 export interface HumanReviewConversation {
@@ -3369,6 +3393,16 @@ export async function configureChannelAccount(
   );
 }
 
+export async function deleteChannelAccountConnection(accountId: number, token: string): Promise<ChannelAccountDeleteResult> {
+  return requestJson<ChannelAccountDeleteResult>(
+    `/api/channel-accounts/${accountId}`,
+    {
+      method: "DELETE"
+    },
+    token
+  );
+}
+
 export async function configureNoopChannelConnector(
   channelId: number,
   token: string
@@ -3418,6 +3452,29 @@ export async function configureChannelConnector(
         status: "draft",
         capabilities: [],
         public_config: {},
+        ...payload
+      })
+    },
+    token
+  );
+}
+
+export async function startChannelConnectorAuthorization(
+  channelId: number,
+  token: string,
+  payload: {
+    provider: string;
+    connect_mode?: "qr" | "manual";
+    redirect_uri?: string;
+  }
+): Promise<ChannelConnectorAuthorization> {
+  return requestJson<ChannelConnectorAuthorization>(
+    `/api/channels/${channelId}/connector-authorization`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        connect_mode: "qr",
+        redirect_uri: "",
         ...payload
       })
     },

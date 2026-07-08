@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(reply_decisions.router)
     app.include_router(reply_strategies.router)
     app.include_router(channel_connectors.router)
+    app.include_router(channel_connectors.legacy_router)
     app.include_router(delivery_failures.router)
     app.include_router(diagnostics.router)
     app.include_router(inbound_worker.router)

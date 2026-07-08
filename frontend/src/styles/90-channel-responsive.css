@@ -539,6 +539,36 @@
   padding: 4px;
 }
 
+.miduoke-manual-field-list {
+  display: grid;
+  gap: 12px;
+}
+
+.miduoke-manual-field-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.miduoke-manual-field-row label {
+  display: block;
+  color: #4b5f76;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.miduoke-manual-field-row input {
+  min-width: 0;
+}
+
+.miduoke-manual-field-action {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 72px;
+}
+
 .miduoke-guide-panel {
   position: sticky;
   top: 18px;
@@ -704,6 +734,19 @@
   .miduoke-search-group select,
   .miduoke-search-group input,
   .miduoke-search-group button {
+    width: 100%;
+  }
+
+  .miduoke-manual-field-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .miduoke-manual-field-action {
+    justify-content: stretch;
+  }
+
+  .miduoke-manual-field-action button {
     width: 100%;
   }
 }
