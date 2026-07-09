@@ -139,6 +139,7 @@ import {
   listSupportTickets,
   login,
   loginLocalDev,
+  registerLocalAccount,
   preflightSignedUpdatePackage,
   publishKnowledgeDocument,
   publishKnowledgeImport,
@@ -237,6 +238,7 @@ import {
   type KnowledgeImportTemplateRow,
   type KnowledgePublication,
   type KnowledgeMemoryMeshOverview,
+  type LocalAccountRegistrationRequest,
   type LocalOwnerSetupRequest,
   type LocalBackupRecord,
   type LocalBackupRestoreDryRun,
@@ -6653,6 +6655,39 @@ export function App() {
     }
   }
 
+  async function handleRegisterLocalAccount(payload: LocalAccountRegistrationRequest) {
+    setAuth({ status: "submitting" });
+    setConnection({ status: "loading" });
+    try {
+      const result = await registerLocalAccount(payload);
+      const nextSection = getPostAuthWorkspaceSection(result.user.roles, window.location.hash);
+      window.localStorage.setItem(TOKEN_STORAGE_KEY, result.access_token);
+      void refreshLocalSetupState();
+      setConnection({ status: "ready", user: result.user, mode: "token" });
+      setChannelIdentityById({});
+      setChannelAccountState({ status: "idle", message: "等待刷新渠道账号", channels: [], accounts: [] });
+      setAccountManagement({ status: "idle", message: "等待刷新账号治理", users: [], roles: [] });
+      setAuth({
+        status: "ready",
+        user: result.user,
+        token: result.access_token,
+        mode: "token"
+      });
+      window.history.replaceState(null, "", getWorkspaceSectionHash(nextSection));
+      setActiveSection(nextSection);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "注册本地账号失败";
+      const friendlyMessage = message.includes("email already registered")
+        ? "这个邮箱已经注册，请直接登录或换一个邮箱。"
+        : message.includes("local account registration disabled")
+          ? "当前环境未开启本地注册，请使用已有账号登录。"
+          : "注册本地账号失败，请检查邮箱、密码和后端服务。";
+      setConnection({ status: "error", error: message });
+      setAuth({ status: "login", error: friendlyMessage });
+      void refreshLocalSetupState();
+    }
+  }
+
   async function enterDemo() {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     const user = createDemoCurrentUser();
@@ -6740,6 +6775,7 @@ export function App() {
         onLogin={(payload) => void handleLogin(payload)}
         onLocalPreviewLogin={() => void handleLocalPreviewLogin()}
         onCreateLocalOwner={(payload) => void handleCreateLocalOwner(payload)}
+        onRegisterLocalAccount={(payload) => void handleRegisterLocalAccount(payload)}
       />
     );
   }
@@ -20247,6 +20283,7 @@ function LoginScreen({
   onLogin,
   onLocalPreviewLogin,
   onCreateLocalOwner,
+  onRegisterLocalAccount,
   setupStatus
 }: {
   loading: boolean;
@@ -20254,6 +20291,7 @@ function LoginScreen({
   onLogin: (payload: LoginRequest) => void;
   onLocalPreviewLogin: () => void;
   onCreateLocalOwner: (payload: LocalOwnerSetupRequest) => void;
+  onRegisterLocalAccount: (payload: LocalAccountRegistrationRequest) => void;
   setupStatus: LocalSetupStatus | null;
 }) {
   const [tenantName, setTenantName] = useState("本地客服工作台");
@@ -20261,9 +20299,11 @@ function LoginScreen({
   const [ownerName, setOwnerName] = useState("负责人");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isRegisteringLocalAccount, setIsRegisteringLocalAccount] = useState(false);
   const canCreateFirstOwner = setupStatus?.can_create_first_owner === true;
   const isInitialized = setupStatus?.initialized ?? false;
   const canUseLocalPreview = Boolean(setupStatus?.dev_bootstrap_enabled && !canCreateFirstOwner);
+  const canRegisterLocalAccount = Boolean(setupStatus?.dev_bootstrap_enabled && isInitialized && !canCreateFirstOwner);
   const readinessItems = setupStatus
     ? [
         {
@@ -20324,6 +20364,13 @@ function LoginScreen({
                 email: email.trim(),
                 password
               });
+            } else if (isRegisteringLocalAccount) {
+              onRegisterLocalAccount({
+                tenant_slug: tenantSlug.trim(),
+                owner_name: ownerName.trim() || "负责人",
+                email: email.trim(),
+                password
+              });
             } else {
               onLogin({
                 tenant_slug: tenantSlug.trim(),
@@ -20337,7 +20384,9 @@ function LoginScreen({
             <h1>登录工作台</h1>
             <p>
               {isInitialized
-                ? "本地工作台已经完成初始化，请使用已有账号登录。"
+                ? isRegisteringLocalAccount
+                  ? "注册一个新的本地账号，提交后直接进入工作台。"
+                  : "本地工作台已经完成初始化，请使用已有账号登录。"
                 : "第一次本地部署时，先创建第一个负责人账号。"}
             </p>
           </div>
@@ -20350,7 +20399,7 @@ function LoginScreen({
               <strong>{canCreateFirstOwner ? "本地工作台尚未初始化" : "本地工作台已初始化"}</strong>
               <span>
                 租户 {setupStatus.tenant_count} 个 · 账号 {setupStatus.user_count} 个
-                {canCreateFirstOwner ? " · 可以创建第一个负责人" : " · 请使用已有账号登录"}
+                {canCreateFirstOwner ? " · 可以创建第一个负责人" : isRegisteringLocalAccount ? " · 正在注册新账号" : " · 请使用已有账号登录"}
               </span>
               <div className="local-setup-checks" aria-label="本地部署安全检查">
                 {readinessItems.map((item) => (
@@ -20378,19 +20427,21 @@ function LoginScreen({
             />
           </label>
 
-          {canCreateFirstOwner ? (
+          {canCreateFirstOwner || isRegisteringLocalAccount ? (
             <>
-              <label className="field">
-                <span>租户名称</span>
-                <input
-                  autoComplete="organization-title"
-                  name="tenant_name"
-                  data-role-smoke="tenant-name"
-                  value={tenantName}
-                  onChange={(event) => setTenantName(event.target.value)}
-                  placeholder="本地客服工作台"
-                />
-              </label>
+              {canCreateFirstOwner ? (
+                <label className="field">
+                  <span>租户名称</span>
+                  <input
+                    autoComplete="organization-title"
+                    name="tenant_name"
+                    data-role-smoke="tenant-name"
+                    value={tenantName}
+                    onChange={(event) => setTenantName(event.target.value)}
+                    placeholder="本地客服工作台"
+                  />
+                </label>
+              ) : null}
 
               <label className="field">
                 <span>负责人姓名</span>
@@ -20440,12 +20491,25 @@ function LoginScreen({
             <button
               type="submit"
               className="primary-action"
-              data-role-smoke={canCreateFirstOwner ? "local-owner-setup" : "login-submit"}
-              disabled={loading || (canCreateFirstOwner && password.length < 8)}
+              data-role-smoke={canCreateFirstOwner ? "local-owner-setup" : isRegisteringLocalAccount ? "local-account-register" : "login-submit"}
+              disabled={loading || ((canCreateFirstOwner || isRegisteringLocalAccount) && password.length < 8)}
             >
-              <LogIn size={17} />
-              {loading ? (canCreateFirstOwner ? "创建中" : "登录中") : canCreateFirstOwner ? "创建负责人并进入" : "登录"}
+              {isRegisteringLocalAccount ? <UserPlus size={17} /> : <LogIn size={17} />}
+              {loading
+                ? canCreateFirstOwner || isRegisteringLocalAccount ? "创建中" : "登录中"
+                : canCreateFirstOwner ? "创建负责人并进入" : isRegisteringLocalAccount ? "注册并进入" : "登录"}
             </button>
+            {canRegisterLocalAccount ? (
+              <button
+                type="button"
+                className="ghost-action"
+                data-role-smoke="local-account-register-toggle"
+                disabled={loading}
+                onClick={() => setIsRegisteringLocalAccount((current) => !current)}
+              >
+                {isRegisteringLocalAccount ? "返回登录" : "注册本地账号"}
+              </button>
+            ) : null}
             {canUseLocalPreview ? (
               <button
                 type="button"
@@ -20461,7 +20525,9 @@ function LoginScreen({
           <p className="login-footnote">
             {canCreateFirstOwner
               ? "知识库、会话记录和渠道配置都绑定到这个本地租户；密码由你在这里首次设置，系统不会预置默认密码。"
-              : "如果忘记负责人密码，需要在本机执行密码重置脚本；网页端不会提供无身份重置入口。"}
+              : isRegisteringLocalAccount
+                ? "本地注册仅用于当前开发工作台；注册成功后会直接进入并保存个人设置。"
+                : "如果忘记负责人密码，可以注册一个新的本地账号，或在本机执行密码重置脚本。"}
           </p>
         </form>
       </section>

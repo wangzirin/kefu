@@ -2733,7 +2733,7 @@ function buildCustomerAccessSnippet(entry: ChannelEntryDefinition, component?: C
     j = d.createElement(q), s = d.getElementsByTagName(q)[0];
     j.async = true;
     j.charset = "UTF-8";
-    j.src = "${widgetBase}/Web/js/customer-widget.js?_=t";
+    j.src = "${widgetBase}/Web/js/customer-widget.js?_=" + Date.now();
     s.parentNode.insertBefore(j, s);
   })(window, document, "script");
 </script>`;

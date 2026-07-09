@@ -117,6 +117,13 @@ export interface LocalOwnerSetupRequest {
   password: string;
 }
 
+export interface LocalAccountRegistrationRequest {
+  tenant_slug: string;
+  owner_name: string;
+  email: string;
+  password: string;
+}
+
 export interface Channel {
   id: number;
   tenant_id: number;
@@ -2903,6 +2910,13 @@ export async function getLocalSetupStatus(): Promise<LocalSetupStatus> {
 
 export async function createLocalOwner(payload: LocalOwnerSetupRequest): Promise<LoginResponse> {
   return requestJson<LoginResponse>("/api/auth/local-setup/owner", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function registerLocalAccount(payload: LocalAccountRegistrationRequest): Promise<LoginResponse> {
+  return requestJson<LoginResponse>("/api/auth/local-setup/account", {
     method: "POST",
     body: JSON.stringify(payload)
   });

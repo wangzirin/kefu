@@ -99,3 +99,10 @@ class LocalOwnerSetupRequest(BaseModel):
     owner_name: str = Field(default="管理员", min_length=1, max_length=120)
     email: str = Field(min_length=3, max_length=180)
     password: str = Field(min_length=8, max_length=128)
+
+
+class LocalAccountRegistrationRequest(BaseModel):
+    tenant_slug: str = Field(default="wanfa-local", min_length=1, max_length=80)
+    owner_name: str = Field(default="管理员", min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=180)
+    password: str = Field(min_length=8, max_length=128)

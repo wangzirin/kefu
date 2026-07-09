@@ -159,6 +159,49 @@ def test_local_owner_setup_is_allowed_with_dev_preview_enabled(client, monkeypat
     assert body["user"]["email"] == "owner@local.test"
 
 
+def test_local_account_registration_adds_account_and_logs_in(client, monkeypatch) -> None:
+    monkeypatch.setenv("STANDARD_OPS_ENV", "development")
+    monkeypatch.setenv("STANDARD_OPS_DEV_BOOTSTRAP_ENABLED", "true")
+    owner_res = client.post(
+        "/api/auth/local-setup/owner",
+        json={
+            "tenant_name": "本地客服工作台",
+            "tenant_slug": "wanfa-local",
+            "owner_name": "负责人",
+            "email": "owner@local.test",
+            "password": "ChangeMe123!",
+        },
+    )
+    assert owner_res.status_code == 201
+
+    register_res = client.post(
+        "/api/auth/local-setup/account",
+        json={
+            "tenant_slug": "wanfa-local",
+            "owner_name": "新客服",
+            "email": "agent@local.test",
+            "password": "AgentPass123!",
+        },
+    )
+    duplicate_res = client.post(
+        "/api/auth/local-setup/account",
+        json={
+            "tenant_slug": "wanfa-local",
+            "owner_name": "重复客服",
+            "email": "agent@local.test",
+            "password": "AgentPass123!",
+        },
+    )
+
+    assert register_res.status_code == 201
+    body = register_res.json()
+    assert body["token_type"] == "bearer"
+    assert body["user"]["tenant"]["slug"] == "wanfa-local"
+    assert body["user"]["name"] == "新客服"
+    assert body["user"]["email"] == "agent@local.test"
+    assert duplicate_res.status_code == 409
+
+
 def test_current_user_requires_real_token_in_customer_mode_even_if_dev_flag_is_misconfigured(client, monkeypatch) -> None:
     monkeypatch.setenv("STANDARD_OPS_ENV", "pilot")
     monkeypatch.setenv("STANDARD_OPS_DEV_BOOTSTRAP_ENABLED", "true")

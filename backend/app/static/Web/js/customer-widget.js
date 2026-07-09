@@ -16,7 +16,7 @@
   var position = config.position || currentScript && currentScript.getAttribute("data-position") || "right-bottom";
   var mode = config.mode || currentScript && currentScript.getAttribute("data-mode") || "widget";
   var buttonText = config.buttonText || currentScript && currentScript.getAttribute("data-button-text") || "在线咨询";
-  var widgetVersion = "2026-07-09-close-actions-bottom-v2";
+  var widgetVersion = "2026-07-09-tenant-slug-polling-v1";
   var existing = document.querySelector('[data-wanfa-customer-widget="' + componentId + '"]');
   var composerMessagePrefix = "__WANFA_COMPOSER_MESSAGE_V1__";
 
@@ -328,6 +328,25 @@
     return "wanfa_last_seen_message_id_" + componentId + "_" + getVisitorId();
   }
 
+  function isNumericTenantId(value) {
+    return /^[0-9]+$/.test(String(value || "").trim());
+  }
+
+  function appendTenantQuery(searchParams) {
+    if (isNumericTenantId(tenantId)) {
+      searchParams.push("tenant_id=" + encodeURIComponent(tenantId));
+    } else {
+      searchParams.push("tenant_slug=" + encodeURIComponent(tenantId));
+    }
+  }
+
+  function buildTenantPayload() {
+    if (isNumericTenantId(tenantId)) {
+      return { tenant_id: Number(tenantId) };
+    }
+    return { tenant_slug: String(tenantId || "").trim() };
+  }
+
   function loadLastSeenMessageId() {
     try {
       lastSeenMessageId = Number(window.localStorage && localStorage.getItem(getLastSeenStorageKey()) || "0") || 0;
@@ -395,9 +414,11 @@
     }
     var visitorId = getVisitorId();
     var afterId = loadLastSeenMessageId();
-    var query = "?tenant_id=" + encodeURIComponent(tenantId)
-      + "&visitor_id=" + encodeURIComponent(visitorId)
-      + "&after_id=" + encodeURIComponent(afterId);
+    var queryParts = [];
+    appendTenantQuery(queryParts);
+    queryParts.push("visitor_id=" + encodeURIComponent(visitorId));
+    queryParts.push("after_id=" + encodeURIComponent(afterId));
+    var query = "?" + queryParts.join("&");
     fetch(apiBase + "/api/public/website-widget/messages" + query)
       .then(function (response) {
         if (!response.ok) {
@@ -475,21 +496,20 @@
     }
     reopenPending = Boolean(action);
     var visitorId = getVisitorId();
+    var requestBody = buildTenantPayload();
+    requestBody.component_id = componentId;
+    requestBody.visitor_id = visitorId;
+    requestBody.visitor_name = "网站访客";
+    requestBody.text = value;
+    requestBody.page_url = window.location.href;
+    requestBody.page_title = document.title;
+    requestBody.reopen_action = action || reopenAction;
     return fetch(apiBase + "/api/public/website-widget/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        tenant_id: Number(tenantId),
-        component_id: componentId,
-        visitor_id: visitorId,
-        visitor_name: "网站访客",
-        text: value,
-        page_url: window.location.href,
-        page_title: document.title,
-        reopen_action: action || reopenAction
-      })
+      body: JSON.stringify(requestBody)
     })
       .then(function (response) {
         if (response.status === 409) {

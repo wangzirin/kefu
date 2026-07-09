@@ -19,6 +19,7 @@ from app.schemas.auth import (
     CurrentUserPasswordChange,
     CurrentUserProfileUpdate,
     CurrentUserSettingsUpdate,
+    LocalAccountRegistrationRequest,
     LocalOwnerSetupRequest,
     LocalSetupStatus,
     LoginRequest,
@@ -440,6 +441,67 @@ def create_local_owner(payload: LocalOwnerSetupRequest, db: Session = Depends(ge
         raise HTTPException(status_code=409, detail="local setup conflict") from exc
 
     return _issue_login_response(db, user=user, tenant=tenant, audit_action="auth.local_setup_login")
+
+
+@router.post("/local-setup/account", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
+def register_local_account(payload: LocalAccountRegistrationRequest, db: Session = Depends(get_db)) -> LoginResponse:
+    settings = get_settings()
+    if settings.env.strip().lower() != "development" or not settings.dev_bootstrap_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="local account registration disabled")
+
+    blockers = _local_setup_safety_blockers()
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "local deployment safety blockers", "blockers": blockers},
+        )
+
+    tenant_slug = _normalize_slug(payload.tenant_slug)
+    email = payload.email.strip().lower()
+    tenant = db.scalar(select(Tenant).where(Tenant.slug == tenant_slug, Tenant.status == "active"))
+    if tenant is None:
+        tenant = db.scalar(select(Tenant).where(Tenant.status == "active").order_by(Tenant.id).limit(1))
+    if tenant is None:
+        raise HTTPException(status_code=409, detail="local workspace is not initialized")
+
+    existing_user = db.scalar(select(User).where(User.tenant_id == tenant.id, User.email == email))
+    if existing_user is not None:
+        raise HTTPException(status_code=409, detail="email already registered")
+
+    try:
+        owner_role: Role | None = None
+        for code, name in DEFAULT_LOCAL_ROLES:
+            role = _ensure_default_role(db, tenant.id, code, name)
+            if code == "owner":
+                owner_role = role
+        if owner_role is None:
+            raise HTTPException(status_code=500, detail="owner role bootstrap failed")
+
+        user = User(
+            tenant_id=tenant.id,
+            name=payload.owner_name.strip(),
+            email=email,
+            password_hash=hash_password(payload.password),
+            status="active",
+        )
+        db.add(user)
+        db.flush()
+        db.add(UserRole(user_id=user.id, role_id=owner_role.id))
+        db.flush()
+        add_audit_event(
+            db,
+            tenant_id=tenant.id,
+            actor_id=user.id,
+            action="auth.local_setup_account_registered",
+            resource_type="user",
+            resource_id=str(user.id),
+            payload={"email": user.email, "tenant_slug": tenant.slug},
+        )
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="local account registration conflict") from exc
+
+    return _issue_login_response(db, user=user, tenant=tenant, audit_action="auth.local_setup_register_login")
 
 
 @router.get("/me", response_model=CurrentUser)
