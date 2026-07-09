@@ -1,0 +1,132 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    env_file:
+      - ./production.env
+    environment:
+      POSTGRES_DB: ${STANDARD_OPS_POSTGRES_DB:-wanfa_ops}
+      POSTGRES_USER: ${STANDARD_OPS_POSTGRES_USER:-wanfa_ops}
+      POSTGRES_PASSWORD: ${STANDARD_OPS_POSTGRES_PASSWORD}
+    volumes:
+      - standard_ops_prod_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${STANDARD_OPS_POSTGRES_USER:-wanfa_ops} -d ${STANDARD_OPS_POSTGRES_DB:-wanfa_ops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - standard_ops_prod_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ./production.env
+    environment:
+      STANDARD_OPS_ENV: production
+      DATABASE_URL: postgresql+psycopg://${STANDARD_OPS_POSTGRES_USER:-wanfa_ops}:${STANDARD_OPS_POSTGRES_PASSWORD}@postgres:5432/${STANDARD_OPS_POSTGRES_DB:-wanfa_ops}
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app/research
+      KNOWLEDGE_VECTOR_STORE: postgres_pgvector_store_v1
+      KNOWLEDGE_EMBEDDING_PROVIDER: ${KNOWLEDGE_EMBEDDING_PROVIDER:-auto}
+      KNOWLEDGE_RERANKER: ${KNOWLEDGE_RERANKER:-siliconflow_reranker_v1}
+      STANDARD_OPS_DEV_BOOTSTRAP_ENABLED: "false"
+      OUTBOX_EXTERNAL_WRITE_ENABLED: ${OUTBOX_EXTERNAL_WRITE_ENABLED:-false}
+      TRUSTED_INBOUND_WORKER_ENABLED: ${TRUSTED_INBOUND_WORKER_ENABLED:-false}
+    command: ["sh", "-c", "python -m alembic -c alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8080"]
+    volumes:
+      - standard_ops_prod_backend_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()\""
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  trusted-inbound-worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    profiles: ["worker"]
+    env_file:
+      - ./production.env
+    environment:
+      STANDARD_OPS_ENV: production
+      DATABASE_URL: postgresql+psycopg://${STANDARD_OPS_POSTGRES_USER:-wanfa_ops}:${STANDARD_OPS_POSTGRES_PASSWORD}@postgres:5432/${STANDARD_OPS_POSTGRES_DB:-wanfa_ops}
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app/research
+      STANDARD_OPS_DEV_BOOTSTRAP_ENABLED: "false"
+      OUTBOX_EXTERNAL_WRITE_ENABLED: ${OUTBOX_EXTERNAL_WRITE_ENABLED:-false}
+      TRUSTED_INBOUND_WORKER_ENABLED: ${TRUSTED_INBOUND_WORKER_ENABLED:-true}
+      TRUSTED_INBOUND_WORKER_TENANT_SLUG: ${TRUSTED_INBOUND_WORKER_TENANT_SLUG:-}
+      TRUSTED_INBOUND_WORKER_USER_EMAIL: ${TRUSTED_INBOUND_WORKER_USER_EMAIL:-}
+      TRUSTED_INBOUND_WORKER_ID: ${TRUSTED_INBOUND_WORKER_ID:-trusted-inbound-worker-1}
+      TRUSTED_INBOUND_WORKER_SLEEP_SECONDS: ${TRUSTED_INBOUND_WORKER_SLEEP_SECONDS:-5}
+      TRUSTED_INBOUND_WORKER_BATCH_SIZE: ${TRUSTED_INBOUND_WORKER_BATCH_SIZE:-20}
+      TRUSTED_INBOUND_WORKER_RATE_LIMIT_PER_MINUTE: ${TRUSTED_INBOUND_WORKER_RATE_LIMIT_PER_MINUTE:-60}
+      TRUSTED_INBOUND_WORKER_LEASE_SECONDS: ${TRUSTED_INBOUND_WORKER_LEASE_SECONDS:-60}
+      TRUSTED_INBOUND_WORKER_HEARTBEAT_STALE_AFTER_SECONDS: ${TRUSTED_INBOUND_WORKER_HEARTBEAT_STALE_AFTER_SECONDS:-180}
+    command: ["python", "-m", "app.workers.trusted_inbound_worker_service"]
+    volumes:
+      - standard_ops_prod_backend_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -m app.workers.trusted_inbound_worker_service --healthcheck"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile.prod
+    ports:
+      - "${STANDARD_OPS_HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget -qO- http://127.0.0.1/health >/dev/null"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  standard_ops_prod_postgres:
+  standard_ops_prod_redis:
+  standard_ops_prod_backend_data:
+

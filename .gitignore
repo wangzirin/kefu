@@ -4,6 +4,7 @@
 .env.*
 !.env.example
 deploy/customer.env
+deploy/production.env
 .pytest_cache/
 __pycache__/
 *.pyc
