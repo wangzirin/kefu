@@ -43,6 +43,7 @@ import {
   createLocalBackup,
   createLocalOwner,
   changeCurrentUserPassword,
+  claimConversation,
   createConnectorSendPlan,
   createDiagnosticUploadPackage,
   createDiagnosticIntakeRecord,
@@ -757,6 +758,13 @@ interface KnowledgeWorkbenchState {
   chunksByDocument: Record<number, KnowledgeChunk[]>;
   publicationsByDocument: Record<number, KnowledgeDocumentPublication[]>;
   searchResult: KnowledgeDocumentSearchResponse | null;
+}
+
+interface KnowledgeSearchSandboxState {
+  status: "idle" | "loading" | "ready" | "error";
+  message: string;
+  query: string;
+  result: KnowledgeDocumentSearchResponse | null;
 }
 
 interface KnowledgeMemoryMeshState {
@@ -1526,6 +1534,18 @@ export function App() {
     message: "等待粘贴最终回复样本与人工标签 CSV"
   });
   const [knowledgeSearchQuery, setKnowledgeSearchQuery] = useState("");
+  const [knowledgeRecallSearch, setKnowledgeRecallSearch] = useState<KnowledgeSearchSandboxState>({
+    status: "idle",
+    message: "",
+    query: "",
+    result: null
+  });
+  const [knowledgeQaSearch, setKnowledgeQaSearch] = useState<KnowledgeSearchSandboxState>({
+    status: "idle",
+    message: "",
+    query: "",
+    result: null
+  });
   const [lastWorkerRun, setLastWorkerRun] = useState<OutboxWorkerRun | null>(null);
   const [lastDeliveryQueueRun, setLastDeliveryQueueRun] = useState<OutboxDeliveryQueueRun | null>(null);
   const [lastInboundWorkerRun, setLastInboundWorkerRun] = useState<TrustedInboundWorkerRun | null>(null);
@@ -3919,12 +3939,16 @@ export function App() {
       }));
     }
     try {
-      await applyConversationWorkflowAction(item.id, auth.token, {
-        action,
-        target_user_id: targetUserId,
-        target_team_id: targetTeamId,
-        note: note?.trim() || conversationActionNote(action)
-      });
+      if (action === "claim") {
+        await claimConversation(item.id, auth.token);
+      } else {
+        await applyConversationWorkflowAction(item.id, auth.token, {
+          action,
+          target_user_id: targetUserId,
+          target_team_id: targetTeamId,
+          note: note?.trim() || conversationActionNote(action)
+        });
+      }
       await refreshConversationInbox(auth.user.tenant.id, auth.token, conversationInboxView, conversationInboxFilters);
       refreshLiveWorkspaceResources();
       if (selectedLiveConversationId === item.id && action !== "close") {
@@ -4741,6 +4765,80 @@ export function App() {
         status: "error",
         message
       }));
+    }
+  }
+
+  function handleKnowledgeRecallSearchQueryChange(query: string) {
+    setKnowledgeRecallSearch((current) => ({
+      ...current,
+      query,
+      message: "",
+      result: query.trim() ? current.result : null
+    }));
+  }
+
+  function handleKnowledgeQaSearchQueryChange(query: string) {
+    setKnowledgeQaSearch((current) => ({
+      ...current,
+      query,
+      message: "",
+      result: query.trim() ? current.result : null
+    }));
+  }
+
+  async function handleSearchKnowledgeRecallDocuments(category = "") {
+    if (auth.status !== "ready" || !auth.token || !canReadKnowledgeDocuments(auth.user)) {
+      return;
+    }
+    const query = knowledgeRecallSearch.query.trim();
+    if (!query) {
+      setKnowledgeRecallSearch((current) => ({
+        ...current,
+        status: "error",
+        message: "请输入要检索的问题",
+        result: null
+      }));
+      return;
+    }
+    setKnowledgeRecallSearch((current) => ({ ...current, status: "loading", message: "" }));
+    try {
+      const result = await searchKnowledgeDocuments(auth.user.tenant.id, auth.token, {
+        query,
+        top_k: 5,
+        category: category.trim()
+      });
+      setKnowledgeRecallSearch((current) => ({ ...current, status: "ready", message: "", result }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "召回测试失败";
+      setKnowledgeRecallSearch((current) => ({ ...current, status: "error", message }));
+    }
+  }
+
+  async function handleSearchKnowledgeQaDocuments() {
+    if (auth.status !== "ready" || !auth.token || !canReadKnowledgeDocuments(auth.user)) {
+      return;
+    }
+    const query = knowledgeQaSearch.query.trim();
+    if (!query) {
+      setKnowledgeQaSearch((current) => ({
+        ...current,
+        status: "error",
+        message: "请输入要测试的问题",
+        result: null
+      }));
+      return;
+    }
+    setKnowledgeQaSearch((current) => ({ ...current, status: "loading", message: "" }));
+    try {
+      const result = await searchKnowledgeDocuments(auth.user.tenant.id, auth.token, {
+        query,
+        top_k: 5,
+        category: ""
+      });
+      setKnowledgeQaSearch((current) => ({ ...current, status: "ready", message: "", result }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "问答测试失败";
+      setKnowledgeQaSearch((current) => ({ ...current, status: "error", message }));
     }
   }
 
@@ -6845,6 +6943,8 @@ export function App() {
     handleCreateKnowledgeTemplateImport,
     handleImportKnowledgeQuestionWorkbook,
     handleRunKnowledgeTemplateSample,
+    handleKnowledgeQaSearchQueryChange,
+    handleKnowledgeRecallSearchQueryChange,
     handleKnowledgeSearchQueryChange,
     handlePublishKnowledgeTemplateImport,
     handleLabelEvaluationRunCaseFactuality,
@@ -6867,6 +6967,8 @@ export function App() {
     handleRunDeliveryQueue,
     handleRunInboundWorker,
     handleRunKnowledgeEvaluation,
+    handleSearchKnowledgeQaDocuments,
+    handleSearchKnowledgeRecallDocuments,
     handleProbeModelService,
     handleRunWorker,
     handleSalesLeadFiltersChange,
@@ -6902,6 +7004,8 @@ export function App() {
     knowledgeGapListView,
     knowledgeGaps,
     knowledgeMemoryMesh,
+    knowledgeQaSearch,
+    knowledgeRecallSearch,
     knowledgeSearchQuery,
     knowledgeUpdatePackageDraft,
     knowledgeWorkbench,
@@ -7029,15 +7133,14 @@ export function App() {
     isLiveConversationActive(item) &&
     liveCurrentUserId !== null &&
     item.assigned_user_id === liveCurrentUserId &&
-    ["assigned_to_me", "handoff"].includes(item.status);
+    item.status === "assigned_to_me";
   const isLiveVisitingConversation = (item: ConversationInboxItem) =>
-    isLiveConversationActive(item) && ["bot_visiting", "bot", "bot_assisting"].includes(item.status);
+    isLiveConversationActive(item) && item.status === "bot_visiting";
   const livePreviewConversation =
     liveConversations.find((item) => item.id === selectedLiveConversationId) ??
     liveConversations.find(isLiveQueuedConversation) ??
     liveConversations.find(isLiveMineConversation) ??
     liveConversations.find(isLiveVisitingConversation) ??
-    liveConversations.find((item) => liveCurrentUserId !== null && item.assigned_user_id === liveCurrentUserId) ??
     liveConversations[0] ??
     null;
   const livePreviewTitle = livePreviewConversation
@@ -11979,6 +12082,9 @@ function KnowledgeDocumentsPanel({
 function KnowledgeRecallPanel({
   state,
   searchQuery,
+  searchResult,
+  searchStatus,
+  searchMessage,
   hasToken,
   onSearchQueryChange,
   onSearchDocuments,
@@ -11986,13 +12092,16 @@ function KnowledgeRecallPanel({
 }: {
   state: KnowledgeWorkbenchState;
   searchQuery: string;
+  searchResult: KnowledgeDocumentSearchResponse | null;
+  searchStatus: KnowledgeSearchSandboxState["status"];
+  searchMessage: string;
   hasToken: boolean;
   onSearchQueryChange: (query: string) => void;
   onSearchDocuments: (category?: string) => void;
   onRefresh: () => void;
 }) {
   const isLoading = state.status === "loading";
-  const searchResult = state.searchResult;
+  const isSearching = searchStatus === "loading";
   const documentCategory = (document: KnowledgeDocument) =>
     document.category ||
     document.tags
@@ -12021,7 +12130,7 @@ function KnowledgeRecallPanel({
     <section className="knowledge-console" id="workspace-knowledge-recall" aria-label="机器人测试召回">
       <header className="knowledge-console-topbar">
         <strong>测试召回</strong>
-        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading}>
+        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading || isSearching}>
           <RefreshCw size={15} />
           {isLoading ? "刷新中" : "刷新"}
         </button>
@@ -12054,18 +12163,19 @@ function KnowledgeRecallPanel({
                 value={searchQuery}
                 onChange={(event) => onSearchQueryChange(event.target.value)}
                 placeholder="输入客户问题，测试机器人召回"
-                disabled={!hasToken || isLoading}
+                disabled={!hasToken || isLoading || isSearching}
               />
               <button
                 type="button"
                 className="primary-action compact"
                 onClick={() => onSearchDocuments(activeKnowledgeCategory === "all" ? "" : activeKnowledgeCategory)}
-                disabled={!hasToken || isLoading}
+                disabled={!hasToken || isLoading || isSearching}
               >
                 <Search size={15} />
-                检索
+                {isSearching ? "检索中" : "检索"}
               </button>
               {searchResult ? <span>命中 {searchResult.matches.length} 条</span> : null}
+              {searchStatus === "error" && searchMessage ? <span>{searchMessage}</span> : null}
             </div>
             {searchResult ? (
               searchResult.matches.length > 0 ? (
@@ -12100,6 +12210,9 @@ function KnowledgeRecallPanel({
 function KnowledgeQATestPanel({
   state,
   searchQuery,
+  searchResult,
+  searchStatus,
+  searchMessage,
   hasToken,
   onSearchQueryChange,
   onSearchDocuments,
@@ -12107,18 +12220,21 @@ function KnowledgeQATestPanel({
 }: {
   state: KnowledgeWorkbenchState;
   searchQuery: string;
+  searchResult: KnowledgeDocumentSearchResponse | null;
+  searchStatus: KnowledgeSearchSandboxState["status"];
+  searchMessage: string;
   hasToken: boolean;
   onSearchQueryChange: (query: string) => void;
   onSearchDocuments: (category?: string) => void;
   onRefresh: () => void;
 }) {
   const isLoading = state.status === "loading";
-  const searchResult = state.searchResult;
+  const isSearching = searchStatus === "loading";
   return (
     <section className="knowledge-console" id="workspace-knowledge-qa-test" aria-label="机器人问答测试">
       <header className="knowledge-console-topbar">
         <strong>问答测试</strong>
-        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading}>
+        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading || isSearching}>
           <RefreshCw size={15} />
           {isLoading ? "刷新中" : "刷新"}
         </button>
@@ -12134,18 +12250,19 @@ function KnowledgeQATestPanel({
                 value={searchQuery}
                 onChange={(event) => onSearchQueryChange(event.target.value)}
                 placeholder="输入客户问题，测试最终回答"
-                disabled={!hasToken || isLoading}
+                disabled={!hasToken || isLoading || isSearching}
               />
               <button
                 type="button"
                 className="primary-action compact"
                 onClick={() => onSearchDocuments("")}
-                disabled={!hasToken || isLoading}
+                disabled={!hasToken || isLoading || isSearching}
               >
                 <Search size={15} />
-                生成回答
+                {isSearching ? "生成中" : "生成回答"}
               </button>
               {searchResult ? <span>引用 {searchResult.final_answer_citations.length} 条</span> : null}
+              {searchStatus === "error" && searchMessage ? <span>{searchMessage}</span> : null}
             </div>
             {searchResult ? (
               searchResult.matches.length > 0 ? (
@@ -12220,7 +12337,7 @@ function BotModelServicePanel({
     },
     {
       label: "智能问答模型",
-      value: provider?.llm_model ?? "Qwen/Qwen3.5-4B",
+      value: provider?.llm_model ?? "Qwen/Qwen3-8B",
       note: "用于根据命中知识生成客服回复。"
     }
   ];

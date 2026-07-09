@@ -1,0 +1,147 @@
+# Wanfa Standard Ops Project Goals
+
+This file records the project-level implementation target for Codex sessions in this repository.
+
+## Current North Star
+
+Build one unified customer-service conversation system across website, WeChat Customer Service, and WeCom, reusing the same Conversation, Message, assignment, AI decision, RAG, and handoff model. Do not create separate channel-specific business logic or parallel status systems.
+
+## Stage 1: Fixed Runtime
+
+Goal: Stop losing time to changing ports, database names, and script URLs.
+
+Fixed runtime values:
+- Development backend: `http://127.0.0.1:8000`
+- Docker database container: `deploy-postgres-1`
+- Website plugin test page: use only one fixed page for website-plugin testing
+- Website widget script: `http://127.0.0.1:8000/Web/js/customer-widget.js`
+- Widget `apiBase`: `http://127.0.0.1:8000`
+
+Acceptance:
+- `GET /health` works.
+- Website sends `你好`, and the backend public widget message API returns `201`.
+- The customer widget can poll and display the AI reply.
+
+## Stage 2: Hard Three-Column Conversation Ownership
+
+Goal: Make it obvious to customer-service staff who owns each conversation.
+
+Status definitions must stay unchanged:
+- `bot_visiting`: AI is serving the visitor; shown in `访问中`.
+- `queued_for_me`: assigned to the current agent but not claimed; shown in `排队中`.
+- `assigned_to_me`: claimed by the current agent; shown in `我的对话`.
+
+Requirements:
+- Conversation lists must show only the current tenant/company data.
+- `排队中` only shows conversations assigned to the current agent.
+- `我的对话` only shows conversations claimed by the current agent.
+- `访问中` shows conversations currently handled by AI.
+- Clicking `接起` must call `POST /api/conversations/{id}/claim`.
+
+Acceptance:
+- After an AI auto reply, the conversation stays in `访问中`.
+- After AI handoff to human, the conversation enters `排队中`.
+- After the agent claims it, the conversation enters `我的对话`.
+- After close, the conversation disappears from all three columns.
+
+## Stage 3: Knowledge Feeding To RAG Loop
+
+Goal: Customer-service staff can feed knowledge, AI can answer from that knowledge, and AI does not invent answers when knowledge is missing.
+
+Requirements:
+- Keep the manual customer-service upload/manual knowledge-entry path.
+- Knowledge flow must cover: clean, chunk, embed, retrieve, recall, rerank, generate final answer.
+- Product/business consultation must cite matched knowledge.
+- If there is no knowledge hit, create a knowledge gap and do not auto-send an invented answer.
+- Knowledge gaps must be visible in the backend/workbench so staff can later fill them.
+
+Acceptance:
+- Feed one knowledge item: `营业时间是 9:00-18:00`.
+- Customer asks `你们几点上班`, and AI can answer with that knowledge.
+- Customer asks something absent from the knowledge base; AI does not invent an answer, and the conversation enters `排队中` / knowledge gap.
+
+## Stage 4: AI Handoff Rules
+
+Goal: AI knows when to stop and call a human.
+
+Handoff conditions:
+- Complaint
+- Abnormal emotion
+- Sensitive content
+- Prompt injection
+- No knowledge hit
+- Low confidence
+- Model failure
+- External send failure
+- Customer explicitly asks for a human agent
+
+Requirements:
+- Generate calming handoff copy when handing off, but do not auto-send complaint-related copy by default.
+- Create a human task.
+- Assign it to an agent.
+- Conversation enters `queued_for_me`.
+- Workbench shows the AI handoff reason.
+
+Acceptance:
+- Customer says `我要投诉`, and the conversation enters `排队中`.
+- Customer says `转人工`, and the conversation enters `排队中`.
+- Customer asks a no-knowledge question, and the conversation enters `排队中`.
+- Workbench shows the handoff reason.
+
+## Stage 5: Human Reply Loop
+
+Goal: Agents can actually complete the customer-service flow.
+
+Requirements:
+- Claim button.
+- Agent sends message.
+- Website widget polling displays the agent reply.
+- Agent closes conversation.
+- Customer side shows the conversation ended.
+- Customer can choose to continue chatting and reopen a new conversation.
+
+Acceptance:
+- Agent claims conversation.
+- Agent replies `您好，我来帮您处理`.
+- Customer website window sees the reply.
+- Agent closes the conversation.
+- Customer side sees the conversation ended.
+
+## Stage 6: WeChat Customer Service Channel
+
+Goal: Copy the already working website main flow into WeChat Customer Service.
+
+Requirements:
+- WeChat Customer Service inbound webhook.
+- WeChat Customer Service outbound sender.
+- Reuse the same AI decision, RAG, handoff, and three-column status model.
+- Do not build separate WeChat-specific business logic.
+
+Acceptance:
+- WeChat customer message enters `访问中`.
+- If AI can reply, it sends through the WeChat Customer Service API.
+- On handoff, the conversation enters `排队中`.
+- After an agent claims it, the manual reply can be sent back to the WeChat customer.
+
+## Stage 7: WeCom Custom App Channel
+
+Goal: Add WeCom custom app as a third channel while still reusing the unified conversation model.
+
+Requirements:
+- First decide whether WeCom custom app is a customer entry channel or an internal support/collaboration tool.
+- If it is a customer entry channel, route it through channel inbound.
+- If it is for internal support notifications/collaboration, do not confuse it with customer conversation entry.
+- Reuse unified Conversation, Message, assignment, and AI decision logic.
+
+Acceptance:
+- WeCom message can create the same kind of Conversation.
+- AI/manual logic does not fork.
+- There is no separate `WeCom status system` beside the website status system.
+
+## Operating Notes
+
+- Prefer fixing the actual runtime drift over adding compatibility branches.
+- Keep backend development address fixed at `http://127.0.0.1:8000`.
+- Keep website-widget script and widget `apiBase` aligned with `http://127.0.0.1:8000`.
+- Keep three-column status names exact: `bot_visiting`, `queued_for_me`, `assigned_to_me`.
+- When implementing new channels, reuse the existing conversation lifecycle instead of inventing a channel-specific lifecycle.

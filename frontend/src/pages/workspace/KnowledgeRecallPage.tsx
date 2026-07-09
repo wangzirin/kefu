@@ -5,10 +5,13 @@ export default function KnowledgeRecallPage({ ctx }: WorkspacePageProps) {
   return (
     <KnowledgeRecallPanel
       state={ctx.knowledgeWorkbench}
-      searchQuery={ctx.knowledgeSearchQuery}
+      searchQuery={ctx.knowledgeRecallSearch.query}
+      searchResult={ctx.knowledgeRecallSearch.result}
+      searchStatus={ctx.knowledgeRecallSearch.status}
+      searchMessage={ctx.knowledgeRecallSearch.message}
       hasToken={Boolean(ctx.auth.token)}
-      onSearchQueryChange={ctx.handleKnowledgeSearchQueryChange}
-      onSearchDocuments={(category?: string) => void ctx.handleSearchKnowledgeDocuments(category)}
+      onSearchQueryChange={ctx.handleKnowledgeRecallSearchQueryChange}
+      onSearchDocuments={(category?: string) => void ctx.handleSearchKnowledgeRecallDocuments(category)}
       onRefresh={() => {
         if (ctx.auth.token && ctx.canReadKnowledgeDocuments(ctx.auth.user)) {
           void ctx.refreshKnowledgeDocuments(ctx.auth.user.tenant.id, ctx.auth.token, ctx.canManageKnowledgeWorkspace);

@@ -379,7 +379,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert widget["conversation_id"]
     assert widget["message_id"]
     assert widget["is_new_conversation"] is True
-    assert widget["conversation_status"] == "waiting_human"
+    assert widget["conversation_status"] == "queued_for_me"
 
     second_widget_res = client.post(
         "/api/public/website-widget/messages",
@@ -428,7 +428,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert poll_res.status_code == 200
     poll = poll_res.json()
     assert poll["conversation_id"] == widget["conversation_id"]
-    assert poll["conversation_status"] == "waiting_human"
+    assert poll["conversation_status"] == "queued_for_me"
     assert poll["messages"] == [
         {
             "id": reply["id"],
@@ -506,7 +506,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     continued = continue_res.json()
     assert continued["is_new_conversation"] is True
     assert continued["conversation_id"] != widget["conversation_id"]
-    assert continued["conversation_status"] == "waiting_human"
+    assert continued["conversation_status"] == "bot_visiting"
 
     continue_poll_res = client.get(
         "/api/public/website-widget/messages",
@@ -519,7 +519,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert continue_poll_res.status_code == 200
     continue_poll = continue_poll_res.json()
     assert continue_poll["conversation_id"] == continued["conversation_id"]
-    assert continue_poll["conversation_status"] == "waiting_human"
+    assert continue_poll["conversation_status"] == "bot_visiting"
     assert continue_poll["messages"][0]["sender_type"] == "agent"
     assert continue_poll["messages"][0]["content"] == "您好，已为您重新接入客服，请问还有什么可以帮您？"
 
@@ -613,7 +613,7 @@ def test_website_widget_auto_replies_only_after_published_knowledge_and_model_re
 
     assert widget_res.status_code == 201
     widget = widget_res.json()
-    assert widget["conversation_status"] == "bot"
+    assert widget["conversation_status"] == "bot_visiting"
     poll_res = client.get(
         "/api/public/website-widget/messages",
         params={
@@ -626,7 +626,8 @@ def test_website_widget_auto_replies_only_after_published_knowledge_and_model_re
     messages = poll_res.json()["messages"]
     assert len(messages) == 1
     assert messages[0]["sender_type"] == "ai"
-    assert "负责人发布后启用 AI 接待" in messages[0]["content"]
+    assert "负责人发布" in messages[0]["content"]
+    assert "启用 AI 接待" in messages[0]["content"]
 
 
 def test_public_website_widget_script_is_hosted(client) -> None:

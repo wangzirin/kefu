@@ -54,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installers\windows\Start-Wan
 
 ```text
 前端工作台：http://127.0.0.1:5173
-后端健康检查：http://127.0.0.1:18080/health
+后端健康检查：http://127.0.0.1:8000/health
 ```
 
 首次进入页面后创建首任负责人账号；本包不会预置默认密码。
@@ -123,6 +123,5 @@ backend\.venv\Scripts\python scripts\check_p3_06u_26h2w_install3_native_app_pack
 - 先确认 Docker Desktop 已启动，而不是只安装了 Docker CLI。
 - 确认 `deploy\customer.env` 存在。
 - 确认数据库密码不再是 `replace-with-local-random-password`。
-- 确认端口 `5173`、`18080`、`5432`、`6379` 没有被其他项目占用。
+- 确认端口 `5173`、`8000`、`5432`、`6379` 没有被其他项目占用。
 - 运行 `installers\windows\HealthCheck-WanfaCustomerService.ps1` 查看本地状态。
-

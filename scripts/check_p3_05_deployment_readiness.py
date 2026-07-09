@@ -118,7 +118,7 @@ def main() -> None:
     for service in ["postgres:", "redis:", "backend:", "frontend:"]:
         if service not in compose:
             fail(f"docker compose service missing: {service.rstrip(':')}")
-    for port in ['"5173:5173"', '"18080:8080"']:
+    for port in ['"5173:5173"', '"8000:8080"']:
         if port not in compose:
             fail(f"docker compose port mapping missing: {port}")
 

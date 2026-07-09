@@ -3951,6 +3951,17 @@ export async function applyConversationWorkflowAction(
   );
 }
 
+export async function claimConversation(
+  conversationId: number,
+  token: string
+): Promise<ConversationAssignmentResponse> {
+  return requestJson<ConversationAssignmentResponse>(
+    `/api/conversations/${conversationId}/claim`,
+    { method: "POST" },
+    token
+  );
+}
+
 export async function listSupportTickets(
   tenantId: string | number,
   token: string,

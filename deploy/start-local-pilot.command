@@ -24,7 +24,7 @@ fi
 
 echo ""
 echo "前端工作台：http://127.0.0.1:5173"
-echo "后端健康检查：http://127.0.0.1:18080/health"
+echo "后端健康检查：http://127.0.0.1:8000/health"
 echo "真实外发和入站 worker 默认保持关闭。"
 echo ""
 read -r -p "按回车键关闭窗口..." _

@@ -5,10 +5,13 @@ export default function KnowledgeQATestPage({ ctx }: WorkspacePageProps) {
   return (
     <KnowledgeQATestPanel
       state={ctx.knowledgeWorkbench}
-      searchQuery={ctx.knowledgeSearchQuery}
+      searchQuery={ctx.knowledgeQaSearch.query}
+      searchResult={ctx.knowledgeQaSearch.result}
+      searchStatus={ctx.knowledgeQaSearch.status}
+      searchMessage={ctx.knowledgeQaSearch.message}
       hasToken={Boolean(ctx.auth.token)}
-      onSearchQueryChange={ctx.handleKnowledgeSearchQueryChange}
-      onSearchDocuments={() => void ctx.handleSearchKnowledgeDocuments()}
+      onSearchQueryChange={ctx.handleKnowledgeQaSearchQueryChange}
+      onSearchDocuments={() => void ctx.handleSearchKnowledgeQaDocuments()}
       onRefresh={() => {
         if (ctx.auth.token && ctx.canReadKnowledgeDocuments(ctx.auth.user)) {
           void ctx.refreshKnowledgeDocuments(ctx.auth.user.tenant.id, ctx.auth.token, ctx.canManageKnowledgeWorkspace);

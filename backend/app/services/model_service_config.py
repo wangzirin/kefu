@@ -13,7 +13,7 @@ SILICONFLOW_PROVIDER = "siliconflow"
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 SILICONFLOW_EMBEDDING_MODEL = "BAAI/bge-large-zh-v1.5"
 SILICONFLOW_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-SILICONFLOW_LLM_MODEL = "Qwen/Qwen3.5-4B"
+SILICONFLOW_LLM_MODEL = "Qwen/Qwen3-8B"
 SILICONFLOW_CREDENTIAL_REF = "local:model_service:siliconflow"
 
 

@@ -31,7 +31,7 @@ from app.services.reply_provenance import build_reply_provenance_id, create_repl
 from app.services.mvp_customer_service_workflow import run_mvp_customer_service_workflow
 from app.services.outbox_delivery_queue import run_outbox_delivery_queue
 
-HUMAN_CONTROLLED_STATUSES = {"assigned_to_me", "handoff", "follow_up", "waiting_customer"}
+HUMAN_CONTROLLED_STATUSES = {"queued_for_me", "assigned_to_me", "handoff", "follow_up", "waiting_customer"}
 
 
 def _create_gap_for_decision(db: Session, decision: ReplyDecision, message: Message) -> None:

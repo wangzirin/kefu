@@ -36,9 +36,9 @@ type ConversationInboxState =
   | { status: "error"; message: string; data: ConversationInboxList };
 
 type WorkbenchQueueKey =
-  | "all"
-  | "mine"
-  | "needs_review";
+  | "visiting"
+  | "queued"
+  | "mine";
 
 interface WorkbenchQueueDefinition {
   key: WorkbenchQueueKey;
@@ -317,7 +317,7 @@ export function ConversationWorkbenchPanel({
   onApproveReviewDraft,
   onConfirmOutboxDraft
 }: ConversationWorkbenchPanelProps) {
-  const [activeQueue, setActiveQueue] = useState<WorkbenchQueueKey>("all");
+  const [activeQueue, setActiveQueue] = useState<WorkbenchQueueKey>("visiting");
   const [editableDraft, setEditableDraft] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
   const [quickReplyTab, setQuickReplyTab] = useState<"personal" | "customer" | "custom">("personal");
@@ -434,34 +434,52 @@ export function ConversationWorkbenchPanel({
   };
   const queueDefinitions: WorkbenchQueueDefinition[] = [
     {
-      key: "all",
-      label: "全部",
-      count: searchedConversations.length,
-      note: "当前页会话",
-      tone: searchedConversations.length > 0 ? "normal" : "success"
+      key: "visiting",
+      label: "访问中",
+      count: searchedConversations.filter((item) => item.status === "bot_visiting").length,
+      note: "AI 正在接待",
+      tone: searchedConversations.some((item) => item.status === "bot_visiting") ? "normal" : "success"
+    },
+    {
+      key: "queued",
+      label: "排队中",
+      count: searchedConversations.filter((item) =>
+        item.status === "queued_for_me" &&
+        currentUserId !== null &&
+        item.assigned_user_id === currentUserId
+      ).length,
+      note: "已分配给当前坐席",
+      tone: searchedConversations.some((item) =>
+        item.status === "queued_for_me" &&
+        currentUserId !== null &&
+        item.assigned_user_id === currentUserId
+      ) ? "urgent" : "success"
     },
     {
       key: "mine",
-      label: "我的",
-      count: searchedConversations.filter((item) => item.assigned_user_id === currentUserId && currentUserId !== null).length,
-      note: "已分配给当前坐席",
+      label: "我的对话",
+      count: searchedConversations.filter((item) =>
+        item.status === "assigned_to_me" &&
+        currentUserId !== null &&
+        item.assigned_user_id === currentUserId
+      ).length,
+      note: "当前坐席已接起",
       tone: "normal"
-    },
-    {
-      key: "needs_review",
-      label: "转人工",
-      count: searchedConversations.filter(hasManualGateSignal).length,
-      note: "需要人工接管",
-      tone: searchedConversations.some(hasManualGateSignal) ? "urgent" : "success"
     }
   ];
+  const activeQueueHasItems = queueDefinitions.some((queue) => queue.key === activeQueue && queue.count > 0);
+  const effectiveActiveQueue = activeQueueHasItems
+    ? activeQueue
+    : queueDefinitions.find((queue) => queue.count > 0)?.key ?? activeQueue;
   const queueMatches = (item: ConversationInboxItem) => {
     if (targetChannelId !== null && item.channel_id !== targetChannelId) {
       return false;
     }
-    if (activeQueue === "all") return true;
-    if (activeQueue === "mine") return item.assigned_user_id === currentUserId && currentUserId !== null;
-    return hasManualGateSignal(item);
+    if (effectiveActiveQueue === "visiting") return item.status === "bot_visiting";
+    if (effectiveActiveQueue === "queued") {
+      return item.status === "queued_for_me" && currentUserId !== null && item.assigned_user_id === currentUserId;
+    }
+    return item.status === "assigned_to_me" && currentUserId !== null && item.assigned_user_id === currentUserId;
   };
 
   const visibleConversations = searchedConversations.filter(queueMatches);
@@ -541,7 +559,11 @@ export function ConversationWorkbenchPanel({
 
   const isLoading = state.status === "loading";
   const pendingCount = scopedConversations.filter((item) => item.last_message_direction === "inbound").length;
-  const handoffCount = scopedConversations.filter(hasManualGateSignal).length;
+  const handoffCount = scopedConversations.filter((item) =>
+    item.status === "queued_for_me" &&
+    currentUserId !== null &&
+    item.assigned_user_id === currentUserId
+  ).length;
   if (!selectedConversation) {
     return (
       <section className="conversation-workbench-empty" id="workspace-live" aria-label="暂无会话">
@@ -581,7 +603,7 @@ export function ConversationWorkbenchPanel({
   const isClaimedByCurrentAgent =
     currentUserId !== null &&
     selectedConversation.assigned_user_id === currentUserId &&
-    ["assigned_to_me", "handoff", "follow_up", "waiting_customer"].includes(selectedConversation.status);
+    selectedConversation.status === "assigned_to_me";
   const composerHasContent = editableDraft.trim().length > 0 || attachmentDrafts.length > 0 || ratingInvitePending;
   const canSendLocalReply =
     hasToken &&
@@ -763,7 +785,7 @@ export function ConversationWorkbenchPanel({
                 aria-label="搜索当前会话列表"
               />
             </label>
-            <QueueTabs queues={queueDefinitions} activeQueue={activeQueue} onSelect={setActiveQueue} />
+            <QueueTabs queues={queueDefinitions} activeQueue={effectiveActiveQueue} onSelect={setActiveQueue} />
             <div className="service-thread-scroll">
               {visibleConversations.map((item) => (
                 <button
@@ -1148,7 +1170,7 @@ function QueueTabs({
   activeQueue: WorkbenchQueueKey;
   onSelect: (queue: WorkbenchQueueKey) => void;
 }) {
-  const primaryQueueKeys: WorkbenchQueueKey[] = ["all", "mine", "needs_review"];
+  const primaryQueueKeys: WorkbenchQueueKey[] = ["visiting", "queued", "mine"];
   const primaryQueues = queues.filter((queue) => primaryQueueKeys.includes(queue.key));
   return (
     <div className="conversation-queue-tabs service-queue-tabs service-queue-filter" aria-label="会话队列筛选">
@@ -1558,10 +1580,16 @@ function normalizeWorkbenchQueueKey(value: string | undefined): WorkbenchQueueKe
     value === "delivery_failed" ||
     value === "sla_breached"
   ) {
-    return "needs_review";
+    return "queued";
   }
-  if (["all", "mine", "needs_review"].includes(value)) {
-    return value as WorkbenchQueueKey;
+  if (value === "all" || value === "bot_visiting") {
+    return "visiting";
+  }
+  if (value === "queued_for_me" || value === "needs_review") {
+    return "queued";
+  }
+  if (value === "assigned_to_me" || value === "mine") {
+    return "mine";
   }
   return null;
 }
