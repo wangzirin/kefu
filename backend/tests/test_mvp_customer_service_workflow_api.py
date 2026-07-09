@@ -150,7 +150,7 @@ def test_mvp_small_talk_auto_replies_on_website_and_stays_visiting(client) -> No
     assert body["ai_cycle"]["outbound_message_id"]
 
 
-def test_mvp_product_without_knowledge_moves_to_queue_for_agent(client) -> None:
+def test_mvp_product_without_knowledge_sends_safe_reply_and_records_gap(client) -> None:
     tenant, token = _bootstrap_owner(client, "mvp-gap", "mvp-gap@example.com")
     headers = _headers(token)
     conversation = _conversation(client, tenant["id"], headers)
@@ -163,22 +163,34 @@ def test_mvp_product_without_knowledge_moves_to_queue_for_agent(client) -> None:
 
     assert res.status_code == 201
     body = res.json()
-    assert body["ai_cycle"]["state"] == "knowledge_gap"
+    assert body["ai_cycle"]["state"] == "auto_reply_ready"
     assert body["ai_cycle"]["reason"] == "no_knowledge_hit"
-    assert body["ai_cycle"]["conversation_status"] == "queued_for_me"
-    assert body["ai_cycle"]["outbound_message_id"] is None
-    assert body["ai_cycle"]["human_review_task_id"]
+    assert body["ai_cycle"]["conversation_status"] == "bot_visiting"
+    assert body["ai_cycle"]["outbound_message_id"]
+    assert body["ai_cycle"]["human_review_task_id"] is None
     detail = client.get(f"/api/conversations/{conversation['id']}", headers=headers)
     assert detail.status_code == 200
-    assert detail.json()["assigned_user_id"] is not None
-    inbox = client.get(
-        f"/api/tenants/{tenant['id']}/conversation-inbox?status=queued_for_me&assigned=mine",
+    detail_body = detail.json()
+    assert detail_body["assigned_user_id"] is None
+    assert any(
+        message["sender_type"] == "ai"
+        and "关于您提到的“有没有火星基地专属套餐？价格多少”" in message["content"]
+        and "为了避免给您错误引导" in message["content"]
+        and "继续问我其他商品" in message["content"]
+        for message in detail_body["messages"]
+    )
+    decisions = client.get(
+        f"/api/tenants/{tenant['id']}/reply-decisions?conversation_id={conversation['id']}",
         headers=headers,
     )
-    assert inbox.status_code == 200
-    item = next(item for item in inbox.json()["items"] if item["id"] == conversation["id"])
-    assert item["latest_handoff_reason"] == "no_knowledge_hit"
-    assert item["latest_handoff_reason_label"] == "无知识命中"
+    assert decisions.status_code == 200
+    payload = decisions.json()["items"][0]["decision_payload"]
+    assert payload["knowledge_gap_required"] is True
+    assert payload["handoff_required"] is False
+    assert payload["reply_branch"] == "knowledge_gap_safe_reply"
+    gaps = client.get(f"/api/tenants/{tenant['id']}/knowledge-gaps?status=open", headers=headers)
+    assert gaps.status_code == 200
+    assert any(item["gap_type"] == "no_knowledge_hit" for item in gaps.json()["items"])
 
 
 def test_mvp_complaint_creates_human_task_without_auto_sending_complaint_copy(client) -> None:

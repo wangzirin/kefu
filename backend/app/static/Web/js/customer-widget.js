@@ -16,15 +16,22 @@
   var position = config.position || currentScript && currentScript.getAttribute("data-position") || "right-bottom";
   var mode = config.mode || currentScript && currentScript.getAttribute("data-mode") || "widget";
   var buttonText = config.buttonText || currentScript && currentScript.getAttribute("data-button-text") || "在线咨询";
+  var widgetVersion = "2026-07-09-close-actions-bottom-v2";
   var existing = document.querySelector('[data-wanfa-customer-widget="' + componentId + '"]');
   var composerMessagePrefix = "__WANFA_COMPOSER_MESSAGE_V1__";
 
   if (existing) {
-    return;
+    if (existing.getAttribute("data-wanfa-widget-version") === widgetVersion) {
+      return;
+    }
+    if (existing.parentNode) {
+      existing.parentNode.removeChild(existing);
+    }
   }
 
   var host = document.createElement("div");
   host.setAttribute("data-wanfa-customer-widget", componentId);
+  host.setAttribute("data-wanfa-widget-version", widgetVersion);
   host.style.position = "fixed";
   host.style.zIndex = "2147483000";
   host.style.right = position.indexOf("right") >= 0 ? "24px" : "auto";
@@ -44,7 +51,7 @@
     ".wanfa-head{display:flex;align-items:center;justify-content:space-between;background:#1677ff;color:#fff;padding:14px 16px}",
     ".wanfa-head strong{font-size:15px}",
     ".wanfa-close{border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer}",
-    ".wanfa-body{flex:1;min-height:0;overflow-y:auto;padding:16px;background:#f8fbff;scroll-behavior:smooth}",
+    ".wanfa-body{flex:1;min-height:0;overflow-y:auto;padding:16px;background:#f8fbff;scroll-behavior:smooth;display:flex;flex-direction:column}",
     ".wanfa-msg{margin:0 0 12px;border-radius:10px;background:#fff;color:#23364d;padding:12px 13px;font-size:14px;line-height:1.55;box-shadow:0 1px 0 rgba(15,35,64,.06)}",
     ".wanfa-msg.agent{background:#eaf3ff;color:#153a66}",
     ".wanfa-msg.system{background:#f1f4f8;color:#607086;text-align:center}",
@@ -59,7 +66,7 @@
     ".wanfa-attachment a{color:#0b63ce;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}",
     ".wanfa-rating-options{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}",
     ".wanfa-rating-options button{border:1px solid #cfe0f6;border-radius:999px;background:#fff;color:#1d4f86;padding:6px 10px;font-size:12px;font-weight:700}",
-    ".wanfa-actions{display:none;gap:8px;margin-top:8px}",
+    ".wanfa-actions{display:none;gap:8px;margin-top:8px;order:9999}",
     ".wanfa-actions.show{display:flex}",
     ".wanfa-actions button{flex:1;border:1px solid #c9d8ea;border-radius:8px;background:#fff;color:#1d4f86;padding:9px 10px;font-size:13px;font-weight:700;cursor:pointer}",
     ".wanfa-actions button:first-child{border-color:#1677ff;background:#1677ff;color:#fff}",
@@ -82,10 +89,6 @@
     '  <div class="wanfa-body">',
     '    <p class="wanfa-msg">您好，请问有什么可以帮您？</p>',
     '    <p class="wanfa-note">发送后会进入客服工作台的网站客服会话。</p>',
-    '    <div class="wanfa-actions" aria-label="会话结束后的操作">',
-    '      <button type="button" class="wanfa-continue">继续聊天</button>',
-    '      <button type="button" class="wanfa-leave-message">留言</button>',
-    "    </div>",
     "  </div>",
     '  <form class="wanfa-input">',
     '    <input type="text" placeholder="请输入你的问题" aria-label="请输入你的问题" />',
@@ -105,21 +108,53 @@
   var input = wrapper.querySelector(".wanfa-input input");
   var submitButton = wrapper.querySelector(".wanfa-input button");
   var body = wrapper.querySelector(".wanfa-body");
-  var actionBar = wrapper.querySelector(".wanfa-actions");
-  var continueButton = wrapper.querySelector(".wanfa-continue");
-  var leaveMessageButton = wrapper.querySelector(".wanfa-leave-message");
+  var actionBar = document.createElement("div");
+  actionBar.className = "wanfa-actions";
+  actionBar.setAttribute("aria-label", "会话结束后的操作");
+  var continueButton = document.createElement("button");
+  continueButton.type = "button";
+  continueButton.className = "wanfa-continue";
+  continueButton.textContent = "继续聊天";
+  var leaveMessageButton = document.createElement("button");
+  leaveMessageButton.type = "button";
+  leaveMessageButton.className = "wanfa-leave-message";
+  leaveMessageButton.textContent = "留言";
+  actionBar.appendChild(continueButton);
+  actionBar.appendChild(leaveMessageButton);
   var pollingStarted = false;
   var lastSeenMessageId = 0;
   var conversationClosed = false;
   var reopenAction = "";
   var reopenPending = false;
 
+  function isActionBarShown() {
+    return actionBar.classList.contains("show");
+  }
+
+  function appendTranscriptNode(node) {
+    body.appendChild(node);
+    if (isActionBarShown()) {
+      moveActionBarToTranscriptEnd();
+    }
+    body.scrollTop = body.scrollHeight;
+  }
+
+  function moveActionBarToTranscriptEnd() {
+    if (actionBar.parentNode !== body) {
+      body.appendChild(actionBar);
+    } else if (body.lastElementChild !== actionBar) {
+      body.appendChild(actionBar);
+    }
+    window.setTimeout(function () {
+      body.scrollTop = body.scrollHeight;
+    }, 0);
+  }
+
   function appendMessage(text, type) {
     var message = document.createElement("p");
     message.className = type ? "wanfa-msg " + type : "wanfa-msg";
     message.textContent = text;
-    body.appendChild(message);
-    body.scrollTop = body.scrollHeight;
+    appendTranscriptNode(message);
     return message;
   }
 
@@ -149,8 +184,7 @@
       rich.textContent = "客服发送了一条消息";
     }
     message.appendChild(rich);
-    body.appendChild(message);
-    body.scrollTop = body.scrollHeight;
+    appendTranscriptNode(message);
   }
 
   function createAttachmentNode(attachment) {
@@ -322,6 +356,9 @@
       return;
     }
     if (conversationClosed) {
+      if (isActionBarShown()) {
+        moveActionBarToTranscriptEnd();
+      }
       return;
     }
     conversationClosed = true;
@@ -329,6 +366,7 @@
     submitButton.disabled = true;
     input.placeholder = "本次咨询已结束";
     actionBar.classList.add("show");
+    moveActionBarToTranscriptEnd();
   }
 
   function prepareReopen(action) {
@@ -337,6 +375,9 @@
     input.disabled = false;
     submitButton.disabled = false;
     actionBar.classList.remove("show");
+    if (actionBar.parentNode === body) {
+      body.removeChild(actionBar);
+    }
     if (action === "leave_message") {
       input.placeholder = "请留下问题和联系方式";
       appendMessage("请留下你的问题和联系方式，客服会尽快处理。", "system");

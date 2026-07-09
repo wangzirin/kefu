@@ -15,6 +15,7 @@ from app.models import (
     HumanReviewTask,
     Message,
     OutboxDraft,
+    ReplyDecision,
     Team,
     User,
 )
@@ -168,6 +169,19 @@ def _latest_open_human_review_task(db: Session, conversation: Conversation) -> H
     )
 
 
+def _latest_manual_reply_decision(db: Session, conversation: Conversation) -> ReplyDecision | None:
+    return db.scalar(
+        select(ReplyDecision)
+        .where(
+            ReplyDecision.tenant_id == conversation.tenant_id,
+            ReplyDecision.conversation_id == conversation.id,
+            ReplyDecision.state.in_(["manual_gate_required", "blocked_by_policy"]),
+        )
+        .order_by(ReplyDecision.created_at.desc(), ReplyDecision.id.desc())
+        .limit(1)
+    )
+
+
 def _build_inbox_item(db: Session, conversation: Conversation, now: datetime) -> ConversationInboxItemRead:
     channel = db.get(Channel, conversation.channel_id)
     contact = db.get(Contact, conversation.contact_id)
@@ -192,6 +206,14 @@ def _build_inbox_item(db: Session, conversation: Conversation, now: datetime) ->
         ),
     )
     latest_human_review_task = _latest_open_human_review_task(db, conversation)
+    latest_manual_decision = None if latest_human_review_task else _latest_manual_reply_decision(db, conversation)
+    latest_handoff_reason = (
+        latest_human_review_task.reason
+        if latest_human_review_task
+        else latest_manual_decision.reason
+        if latest_manual_decision
+        else ""
+    )
     outbox_pending_count = _count_scalar(
         db,
         select(func.count(OutboxDraft.id)).where(
@@ -235,12 +257,8 @@ def _build_inbox_item(db: Session, conversation: Conversation, now: datetime) ->
         sla_status=sla_status,
         sla_due_at=sla_due_at,
         human_review_open_count=human_review_open_count,
-        latest_handoff_reason=latest_human_review_task.reason if latest_human_review_task else "",
-        latest_handoff_reason_label=(
-            HANDOFF_REASON_LABELS.get(latest_human_review_task.reason, latest_human_review_task.reason)
-            if latest_human_review_task
-            else ""
-        ),
+        latest_handoff_reason=latest_handoff_reason,
+        latest_handoff_reason_label=HANDOFF_REASON_LABELS.get(latest_handoff_reason, latest_handoff_reason),
         latest_human_review_task_id=latest_human_review_task.id if latest_human_review_task else None,
         outbox_pending_count=outbox_pending_count,
         delivery_failure_open_count=delivery_failure_open_count,

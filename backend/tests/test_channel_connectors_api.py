@@ -379,7 +379,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert widget["conversation_id"]
     assert widget["message_id"]
     assert widget["is_new_conversation"] is True
-    assert widget["conversation_status"] == "queued_for_me"
+    assert widget["conversation_status"] == "bot_visiting"
 
     second_widget_res = client.post(
         "/api/public/website-widget/messages",
@@ -428,9 +428,15 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert poll_res.status_code == 200
     poll = poll_res.json()
     assert poll["conversation_id"] == widget["conversation_id"]
-    assert poll["conversation_status"] == "queued_for_me"
-    assert poll["messages"] == [
-        {
+    assert poll["conversation_status"] == "bot_visiting"
+    assert any(
+        message["sender_type"] == "ai"
+        and "当前的知识库中暂时还没有收录相关信息" in message["content"]
+        and "继续问我其他商品" in message["content"]
+        for message in poll["messages"]
+    )
+    assert any(
+        message == {
             "id": reply["id"],
             "conversation_id": widget["conversation_id"],
             "direction": "outbound",
@@ -438,7 +444,8 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
             "content": "您好，网站客服已经收到您的咨询。",
             "created_at": reply["created_at"],
         }
-    ]
+        for message in poll["messages"]
+    )
 
     empty_poll_res = client.get(
         "/api/public/website-widget/messages",
@@ -635,8 +642,18 @@ def test_public_website_widget_script_is_hosted(client) -> None:
 
     assert res.status_code == 200
     assert "javascript" in res.headers["content-type"]
+    assert res.headers["cache-control"] == "no-store, max-age=0"
     assert "window._WANFA" in res.text
     assert "/api/public/website-widget/messages" in res.text
+    assert "appendTranscriptNode" in res.text
+    assert "moveActionBarToTranscriptEnd" in res.text
+    assert "display:flex;flex-direction:column" in res.text
+    assert "order:9999" in res.text
+    assert "'    <div class=\"wanfa-actions\" aria-label=\"会话结束后的操作\">'," not in res.text
+    assert "data-wanfa-widget-version" in res.text
+    assert "existing.parentNode.removeChild(existing)" in res.text
+    assert "body.appendChild(actionBar)" in res.text
+    assert "document.createElement(\"div\")" in res.text
 
 
 def test_channel_account_identity_config_is_readable_and_does_not_enable_external_write(client) -> None:

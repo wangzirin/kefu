@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -52,6 +53,15 @@ def create_app() -> FastAPI:
     if settings.env == "development":
         cors_options["allow_origin_regex"] = ".*"
     app.add_middleware(CORSMiddleware, **cors_options)
+
+    @app.get("/Web/js/customer-widget.js", include_in_schema=False)
+    def customer_widget_script() -> FileResponse:
+        return FileResponse(
+            static_root / "Web" / "js" / "customer-widget.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+
     app.mount("/Web/js", StaticFiles(directory=static_root / "Web" / "js"), name="web-js")
     app.include_router(health.router)
     app.include_router(auth.router)

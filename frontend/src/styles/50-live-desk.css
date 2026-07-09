@@ -932,6 +932,26 @@
   font-size: 14px;
 }
 
+.miduoke-quick-list .miduoke-customer-handoff-reason {
+  gap: 6px;
+  border: 1px solid #ffd8d5;
+  border-radius: 4px;
+  background: #fff7f6;
+  padding: 10px 11px;
+}
+
+.miduoke-quick-list .miduoke-customer-handoff-reason strong {
+  color: #9f1d16;
+}
+
+.miduoke-customer-handoff-reason p {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
 .miduoke-quick-list button {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);

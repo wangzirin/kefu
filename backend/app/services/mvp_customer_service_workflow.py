@@ -371,14 +371,19 @@ def run_mvp_customer_service_workflow(
         if not knowledge_matches:
             knowledge_matches = _fallback_object_knowledge(db, tenant_id=conversation.tenant_id, query=processed_text)
         if not knowledge_matches:
-            state = "knowledge_gap"
+            state = "auto_reply_ready"
             reason = "no_knowledge_hit"
-            delivery_mode = "human_review"
-            handoff_required = True
+            delivery_mode = "external_write_allowed"
+            handoff_required = False
             knowledge_gap_required = True
-            reply_branch = "knowledge_gap"
-            risk_level = "medium"
-            draft_reply = "关于这个产品，我目前还没有可引用的知识。需要客服补充商品资料后再准确回复。"
+            reply_branch = "knowledge_gap_safe_reply"
+            confidence = 0.74
+            risk_level = "low"
+            draft_reply = (
+                f"关于您提到的“{processed_text}”，我当前的知识库中暂时还没有收录相关信息。"
+                "为了避免给您错误引导，我无法直接给出确切答案。\n\n"
+                "您也可以继续问我其他商品、营业时间、订单物流或售后相关问题，我会尽量根据已收录资料为您解答。"
+            )
         else:
             confidence = max(item.confidence for item in knowledge_matches)
             model_result = generate_reply_draft(

@@ -407,6 +407,27 @@ export function ConversationWorkbenchPanel({
     const drafts = draftsByConversation.get(item.id) ?? [];
     return item.delivery_failure_open_count > 0 || drafts.some((draft) => (failuresByDraft.get(draft.id) ?? []).length > 0);
   };
+  const getHandoffReasonLabel = (item: ConversationInboxItem) => {
+    if (item.latest_handoff_reason_label) {
+      return item.latest_handoff_reason_label;
+    }
+    if (item.latest_handoff_reason) {
+      return formatReplyDecisionReasonLabel(item.latest_handoff_reason);
+    }
+    const review = reviewByConversation.get(item.id);
+    if (review?.reason) {
+      return formatReplyDecisionReasonLabel(review.reason);
+    }
+    const decision = replyDecisionByConversation.get(item.id);
+    if (!decision || decision.state === "auto_reply_ready") {
+      return "";
+    }
+    const payloadLabel = readRecordString(decision.decision_payload, "handoff_reason_label");
+    if (payloadLabel) {
+      return payloadLabel;
+    }
+    return formatReplyDecisionReasonLabel(decision.reason);
+  };
   const hasKnowledgeGapSignal = (item: ConversationInboxItem) => {
     const review = reviewByConversation.get(item.id);
     const decision = replyDecisionByConversation.get(item.id);
@@ -594,6 +615,7 @@ export function ConversationWorkbenchPanel({
         messages: conversationDetail?.id === selectedConversation.id ? conversationDetail.messages : []
       })
     : [];
+  const selectedHandoffReasonLabel = getHandoffReasonLabel(selectedConversation);
   const localReplyIsForSelected = localReplyState.conversationId === selectedConversation.id;
   const isSendingLocalReply = localReplyIsForSelected && localReplyState.status === "sending";
   const isQueuedForCurrentAgent =
@@ -806,7 +828,7 @@ export function ConversationWorkbenchPanel({
                       <small>{formatWaitingMinutes(item.waiting_minutes)}</small>
                       {hasManualGateSignal(item) ? (
                         <span className="thread-status-dot is-hot">
-                          {item.latest_handoff_reason_label || "转人工"}
+                          {getHandoffReasonLabel(item) || "转人工"}
                         </span>
                       ) : null}
                       {!hasManualGateSignal(item) && item.sla_status === "breached" ? <span className="thread-status-dot is-hot">超时</span> : null}
@@ -1085,6 +1107,12 @@ export function ConversationWorkbenchPanel({
                 <input placeholder="搜索" />
               </label>
               <div className="miduoke-quick-list">
+                {quickReplyTab === "customer" && selectedHandoffReasonLabel ? (
+                  <section className="miduoke-customer-handoff-reason">
+                    <strong>转人工原因</strong>
+                    <p>{selectedHandoffReasonLabel}</p>
+                  </section>
+                ) : null}
                 {selectedQuickReplyGroups.map((group) => (
                   <section key={group.title}>
                     <strong>{group.title}</strong>

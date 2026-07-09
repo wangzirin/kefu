@@ -339,6 +339,8 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
     )
     db.add(record)
     db.flush()
+    if candidate.knowledge_gap_required:
+        _create_gap_for_decision(db, record, message)
     create_reply_decision_citation_snapshot(db, decision=record, card=None)
 
     outbound_message_id = None
@@ -461,7 +463,7 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
     else:
         conversation.status = "queued_for_me"
         conversation.assigned_user_id = conversation.assigned_user_id or handoff_user_id
-        if record.state in {"manual_gate_required", "knowledge_gap", "blocked_by_policy"}:
+        if record.state in {"manual_gate_required", "knowledge_gap", "blocked_by_policy"} and not candidate.knowledge_gap_required:
             _create_gap_for_decision(db, record, message)
     if record.state == "auto_reply_ready" and delivery_status == "sent":
         conversation.status = "bot_visiting"
