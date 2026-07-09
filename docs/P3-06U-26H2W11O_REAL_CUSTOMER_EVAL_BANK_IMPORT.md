@@ -3,7 +3,7 @@
 ## 结论
 
 - 阶段状态：`passed`
-- 输入文件：`/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11o_and_11p_accept_rea0/real_customer_bank.csv`
+- 输入文件：`C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11o_and_11p_accept_rea0\real_customer_bank.csv`
 - 数据来源类型：`unspecified`
 - 真实题库文件存在：`true`
 - 真实客户题库已确认：`true`
@@ -27,8 +27,8 @@
 
 ## 输出
 
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11o_and_11p_accept_rea0/h2w11o/summary.json`
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11o_and_11p_accept_rea0/h2w11o/real_customer_eval_bank_catalog_redacted.csv`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11o_and_11p_accept_rea0\h2w11o\summary.json`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11o_and_11p_accept_rea0\h2w11o\real_customer_eval_bank_catalog_redacted.csv`
 
 ## 边界
 

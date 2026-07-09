@@ -33,6 +33,7 @@ from app.schemas.knowledge import (
     KnowledgeDocumentRollbackCreate,
     KnowledgeDocumentSearchRequest,
     KnowledgeDocumentSearchResponse,
+    KnowledgeDocumentUpdate,
     KnowledgeEmbeddingProviderSmokeCreate,
     KnowledgeEmbeddingProviderSmokeRead,
     KnowledgeEvaluationRunCaseFactualityBatchLabelCreate,
@@ -99,6 +100,7 @@ from app.services.knowledge import (
     create_knowledge_import,
     create_knowledge_vector_index_plan,
     create_object_knowledge_card,
+    delete_knowledge_document,
     download_customer_quality_report_archive,
     export_knowledge_evaluation_run_report,
     export_customer_quality_report,
@@ -135,6 +137,7 @@ from app.services.knowledge import (
     sync_knowledge_gaps,
     update_knowledge_card,
     update_business_object,
+    update_knowledge_document,
     update_knowledge_gap,
     import_knowledge_update_package,
     precheck_knowledge_import,
@@ -424,6 +427,25 @@ def list_tenant_knowledge_documents(
         page_size=page_size,
         principal=principal,
     )
+
+
+@router.patch("/knowledge-documents/{document_id}", response_model=KnowledgeDocumentRead)
+def patch_tenant_knowledge_document(
+    document_id: int,
+    payload: KnowledgeDocumentUpdate,
+    principal: CurrentPrincipal = Depends(require_permission(KNOWLEDGE_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> KnowledgeDocumentRead:
+    return update_knowledge_document(db, document_id, payload, principal)
+
+
+@router.delete("/knowledge-documents/{document_id}", response_model=KnowledgeDocumentRead)
+def delete_tenant_knowledge_document(
+    document_id: int,
+    principal: CurrentPrincipal = Depends(require_permission(KNOWLEDGE_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> KnowledgeDocumentRead:
+    return delete_knowledge_document(db, document_id, principal)
 
 
 @router.get("/knowledge-documents/{document_id}/chunks", response_model=list[KnowledgeChunkRead])

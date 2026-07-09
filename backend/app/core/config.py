@@ -36,6 +36,11 @@ class Settings:
     deepseek_api_key: str
     deepseek_model: str
     deepseek_fallback_model: str
+    siliconflow_api_base: str
+    siliconflow_api_key: str
+    siliconflow_embedding_model: str
+    siliconflow_reranker_model: str
+    siliconflow_llm_model: str
     model_http_timeout_seconds: float
     model_budget_guard_enabled: bool
     model_budget_daily_limit_cny: float
@@ -105,6 +110,11 @@ def get_settings() -> Settings:
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
         deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         deepseek_fallback_model=os.getenv("DEEPSEEK_FALLBACK_MODEL", "deepseek-v4-flash"),
+        siliconflow_api_base=os.getenv("SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1").strip(),
+        siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY", "").strip(),
+        siliconflow_embedding_model=os.getenv("SILICONFLOW_EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5").strip(),
+        siliconflow_reranker_model=os.getenv("SILICONFLOW_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3").strip(),
+        siliconflow_llm_model=os.getenv("SILICONFLOW_LLM_MODEL", "Qwen/Qwen3.5-4B").strip(),
         model_http_timeout_seconds=float(os.getenv("MODEL_HTTP_TIMEOUT_SECONDS", "20")),
         model_budget_guard_enabled=os.getenv("MODEL_BUDGET_GUARD_ENABLED", "true").strip().lower()
         in {"1", "true", "yes", "on"},

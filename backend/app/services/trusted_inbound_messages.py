@@ -157,7 +157,7 @@ def _get_or_create_conversation(
         tenant_id=tenant_id,
         channel_id=channel.id,
         contact_id=contact.id,
-        status="bot",
+        status="bot_visiting",
         priority="normal",
         subject=f"{channel.name} 入站咨询"[:180],
         last_message_at=now,
@@ -180,6 +180,28 @@ def _get_or_create_conversation(
         )
     )
     return conversation
+
+
+def _latest_conversation_for_contact(
+    db: Session,
+    *,
+    tenant_id: int,
+    channel_id: int,
+    contact_id: int,
+) -> Conversation | None:
+    return db.scalar(
+        select(Conversation)
+        .where(
+            Conversation.tenant_id == tenant_id,
+            Conversation.channel_id == channel_id,
+            Conversation.contact_id == contact_id,
+        )
+        .order_by(Conversation.last_message_at.desc(), Conversation.id.desc())
+    )
+
+
+def _provider_blocks_reopen_after_close(provider: str) -> bool:
+    return provider in {"wecom", "wechat_kf", "wechat_official_account", "wechat_miniapp"}
 
 
 def _message_from_existing_receipt(receipt: ChannelDeliveryReceipt) -> tuple[int | None, int | None, int | None]:
@@ -310,6 +332,42 @@ def create_trusted_inbound_message_if_ready(
             idempotency_status="contact_identity_missing",
             idempotency_key=idempotency_key,
             next_action="provide_contact_identity_before_creating_message",
+        )
+    latest_conversation = _latest_conversation_for_contact(
+        db,
+        tenant_id=channel.tenant_id,
+        channel_id=channel.id,
+        contact_id=contact.id,
+    )
+    if (
+        latest_conversation is not None
+        and latest_conversation.status == "closed"
+        and _provider_blocks_reopen_after_close(provider)
+    ):
+        add_audit_event(
+            db,
+            tenant_id=channel.tenant_id,
+            actor_id=None,
+            action="channel_webhook.closed_conversation_inbound_blocked",
+            resource_type="conversation",
+            resource_id=str(latest_conversation.id),
+            payload={
+                "channel_id": channel.id,
+                "provider": provider,
+                "provider_event_id": provider_event_id,
+                "external_message_id": external_message_id,
+                "idempotency_key": idempotency_key,
+                "contact_id": contact.id,
+            },
+        )
+        return TrustedInboundResult(
+            status="closed_conversation_inbound_blocked",
+            idempotency_status="blocked_after_close",
+            idempotency_key=idempotency_key,
+            trusted_message_creation=False,
+            contact_id=contact.id,
+            conversation_id=latest_conversation.id,
+            next_action="conversation_closed_ignore_inbound_until_reopened_by_operator",
         )
     conversation = _get_or_create_conversation(
         db,

@@ -37,8 +37,13 @@ services:
       DATABASE_URL: postgresql+psycopg://wanfa_ops:${STANDARD_OPS_POSTGRES_PASSWORD}@postgres:5432/wanfa_ops
       REDIS_URL: redis://redis:6379/0
       PYTHONPATH: /app/research
+      KNOWLEDGE_VECTOR_STORE: postgres_pgvector_store_v1
+      KNOWLEDGE_EMBEDDING_PROVIDER: auto
+      KNOWLEDGE_RERANKER: siliconflow_reranker_v1
     ports:
       - "18080:8080"
+    volumes:
+      - ../backend/data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,7 +69,10 @@ services:
       DATABASE_URL: postgresql+psycopg://wanfa_ops:${STANDARD_OPS_POSTGRES_PASSWORD}@postgres:5432/wanfa_ops
       REDIS_URL: redis://redis:6379/0
       PYTHONPATH: /app/research
-      OUTBOX_EXTERNAL_WRITE_ENABLED: "false"
+      KNOWLEDGE_VECTOR_STORE: postgres_pgvector_store_v1
+      KNOWLEDGE_EMBEDDING_PROVIDER: auto
+      KNOWLEDGE_RERANKER: siliconflow_reranker_v1
+      OUTBOX_EXTERNAL_WRITE_ENABLED: "true"
       TRUSTED_INBOUND_WORKER_ENABLED: "true"
       TRUSTED_INBOUND_WORKER_TENANT_SLUG: ${TRUSTED_INBOUND_WORKER_TENANT_SLUG:-}
       TRUSTED_INBOUND_WORKER_USER_EMAIL: ${TRUSTED_INBOUND_WORKER_USER_EMAIL:-}
@@ -75,6 +83,8 @@ services:
       TRUSTED_INBOUND_WORKER_LEASE_SECONDS: ${TRUSTED_INBOUND_WORKER_LEASE_SECONDS:-60}
       TRUSTED_INBOUND_WORKER_HEARTBEAT_STALE_AFTER_SECONDS: ${TRUSTED_INBOUND_WORKER_HEARTBEAT_STALE_AFTER_SECONDS:-180}
     command: ["python", "-m", "app.workers.trusted_inbound_worker_service"]
+    volumes:
+      - ../backend/data:/app/data
     depends_on:
       postgres:
         condition: service_healthy

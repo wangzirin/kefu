@@ -29,8 +29,20 @@ from app.schemas.conversation_inbox import (
 
 SLA_WARNING_MINUTES = 30
 SLA_BREACH_MINUTES = 60
-OPEN_CONVERSATION_STATUSES = {"bot", "handoff", "open", "pending", "waiting_human", "follow_up"}
+OPEN_CONVERSATION_STATUSES = {
+    "bot",
+    "bot_visiting",
+    "handoff",
+    "queued_for_me",
+    "assigned_to_me",
+    "open",
+    "pending",
+    "waiting_human",
+    "follow_up",
+}
 PENDING_OUTBOX_STATUSES = {"pending_confirmation", "ready_to_send"}
+CUSTOMER_CLOSE_NOTICE = "客服已关闭对话，本次咨询已结束。"
+CUSTOMER_TRANSFER_NOTICE = "正在为您转接其他客服，请稍候。"
 PRIORITY_ORDER = {
     "critical": 5,
     "urgent": 4,
@@ -56,6 +68,28 @@ def _as_aware(value: datetime | None) -> datetime | None:
 
 def _count_scalar(db: Session, query) -> int:
     return int(db.scalar(query) or 0)
+
+
+def _add_customer_visible_system_message(
+    db: Session,
+    conversation: Conversation,
+    *,
+    content: str,
+    external_message_id: str,
+    created_at: datetime,
+) -> Message:
+    conversation.last_message_at = created_at
+    message = Message(
+        conversation_id=conversation.id,
+        direction="outbound",
+        sender_type="system",
+        content=content,
+        external_message_id=external_message_id,
+        created_at=created_at,
+    )
+    db.add(message)
+    db.flush()
+    return message
 
 
 def _last_message(db: Session, conversation_id: int, direction: str | None = None) -> Message | None:
@@ -353,33 +387,37 @@ def apply_conversation_workflow_action(
                 detail="conversation already assigned",
             )
         conversation.assigned_user_id = principal.user.id
-        conversation.status = "handoff"
+        conversation.status = "assigned_to_me"
     elif payload.action == "release":
         conversation.assigned_user_id = None
         conversation.assigned_team_id = None
-        conversation.status = "waiting_human"
+        conversation.status = "queued_for_me"
     elif payload.action == "transfer":
         if payload.target_user_id is None and payload.target_team_id is None:
             raise HTTPException(
                 status_code=422,
                 detail="target_user_id or target_team_id required",
             )
+        now = utc_now()
         conversation.assigned_user_id = payload.target_user_id
         conversation.assigned_team_id = payload.target_team_id
-        conversation.status = "handoff"
+        conversation.status = "queued_for_me"
+        _add_customer_visible_system_message(
+            db,
+            conversation,
+            content=CUSTOMER_TRANSFER_NOTICE,
+            external_message_id=f"local-transfer-{conversation.id}-{int(now.timestamp())}",
+            created_at=now,
+        )
     elif payload.action == "close":
         now = utc_now()
         conversation.status = "closed"
-        conversation.last_message_at = now
-        db.add(
-            Message(
-                conversation_id=conversation.id,
-                direction="outbound",
-                sender_type="system",
-                content="客服已关闭对话",
-                external_message_id=f"local-close-{conversation.id}-{int(now.timestamp())}",
-                created_at=now,
-            )
+        _add_customer_visible_system_message(
+            db,
+            conversation,
+            content=CUSTOMER_CLOSE_NOTICE,
+            external_message_id=f"local-close-{conversation.id}-{int(now.timestamp())}",
+            created_at=now,
         )
     elif payload.action == "resolve":
         conversation.status = "resolved"
@@ -391,7 +429,7 @@ def apply_conversation_workflow_action(
         conversation.status = "waiting_customer"
     elif payload.action == "reopen":
         conversation.assigned_user_id = conversation.assigned_user_id or principal.user.id
-        conversation.status = "handoff"
+        conversation.status = "assigned_to_me"
     elif payload.action == "note":
         if not note:
             raise HTTPException(
@@ -431,10 +469,18 @@ def create_agent_reply(
         raise HTTPException(status_code=404, detail="conversation not found")
     if conversation.status == "resolved" and not payload.close_conversation:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conversation already resolved")
+    if conversation.status == "closed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conversation already closed")
+    if conversation.assigned_user_id not in {None, principal.user.id}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conversation assigned to another agent")
+    if conversation.status == "queued_for_me":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="claim conversation before replying")
+    if conversation.status not in {"assigned_to_me", "handoff", "follow_up", "waiting_customer"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conversation is not claimed by agent")
     now = utc_now()
     if conversation.assigned_user_id is None:
         conversation.assigned_user_id = principal.user.id
-    conversation.status = "resolved" if payload.close_conversation else "handoff"
+    conversation.status = "assigned_to_me"
     message = Message(
         conversation_id=conversation.id,
         direction="outbound",
@@ -446,6 +492,17 @@ def create_agent_reply(
     conversation.last_message_at = now
     db.add(message)
     db.flush()
+    close_message_id = None
+    if payload.close_conversation:
+        conversation.status = "closed"
+        close_message = _add_customer_visible_system_message(
+            db,
+            conversation,
+            content=CUSTOMER_CLOSE_NOTICE,
+            external_message_id=f"local-close-{conversation.id}-{int(now.timestamp())}",
+            created_at=now,
+        )
+        close_message_id = close_message.id
     db.add(
         ConversationEvent(
             conversation_id=conversation.id,
@@ -454,8 +511,9 @@ def create_agent_reply(
             payload=json.dumps(
                 {
                     "message_id": message.id,
+                    "close_message_id": close_message_id,
                     "close_conversation": payload.close_conversation,
-                    "external_write": conversation.status == "handoff",
+                    "external_write": True,
                 },
                 ensure_ascii=False,
             ),

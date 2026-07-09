@@ -4,7 +4,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
-from app.models import Conversation, ConversationEvent, HumanReviewTask, Message, OutboxDraft, Role, User, UserRole, WorkflowRun
+from app.models import (
+    Conversation,
+    ConversationEvent,
+    HumanReviewTask,
+    Message,
+    OutboxDraft,
+    Role,
+    User,
+    UserRole,
+    WorkflowRun,
+)
 from app.models.foundation import utc_now
 
 
@@ -366,7 +376,7 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
     assert claim_res.status_code == 200
     claimed = claim_res.json()
     assert claimed["assigned_user_id"] == owner["id"]
-    assert claimed["status"] == "handoff"
+    assert claimed["status"] == "assigned_to_me"
 
     empty_note = client.post(
         f"/api/conversations/{conversation['id']}/workflow-actions",
@@ -398,7 +408,15 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
     assert transfer_res.status_code == 200
     transferred = transfer_res.json()
     assert transferred["assigned_user_id"] == agent["id"]
-    assert transferred["status"] == "handoff"
+    assert transferred["status"] == "queued_for_me"
+    transfer_message = db_session.scalar(
+        select(Message)
+        .where(Message.conversation_id == conversation["id"], Message.sender_type == "system")
+        .order_by(Message.id.desc())
+    )
+    assert transfer_message is not None
+    assert transfer_message.direction == "outbound"
+    assert transfer_message.content == "正在为您转接其他客服，请稍候。"
 
     wait_customer_res = client.post(
         f"/api/conversations/{conversation['id']}/workflow-actions",
@@ -424,7 +442,7 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
     assert release_res.status_code == 200
     released = release_res.json()
     assert released["assigned_user_id"] is None
-    assert released["status"] == "waiting_human"
+    assert released["status"] == "queued_for_me"
 
     reopen_res = client.post(
         f"/api/conversations/{conversation['id']}/workflow-actions",
@@ -434,7 +452,7 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
     assert reopen_res.status_code == 200
     reopened = reopen_res.json()
     assert reopened["assigned_user_id"] == owner["id"]
-    assert reopened["status"] == "handoff"
+    assert reopened["status"] == "assigned_to_me"
 
     close_res = client.post(
         f"/api/conversations/{conversation['id']}/workflow-actions",
@@ -449,7 +467,8 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
         .order_by(Message.id.desc())
     )
     assert close_message is not None
-    assert close_message.content == "客服已关闭对话"
+    assert close_message.direction == "outbound"
+    assert close_message.content == "客服已关闭对话，本次咨询已结束。"
 
     transfer_without_target = client.post(
         f"/api/conversations/{conversation['id']}/workflow-actions",
@@ -475,3 +494,47 @@ def test_conversation_workflow_actions_cover_agent_lifecycle_and_audit_events(
     assert "conversation.workflow.reopen" in event_types
     assert "conversation.workflow.close" in event_types
     assert any("客户需要今天下午回访" in event.payload for event in events)
+
+
+def test_close_action_records_customer_notice_without_external_write(client, db_session: Session) -> None:
+    tenant, _owner, owner_token = _bootstrap_owner(client, slug="inbox-close-local-notice")
+    headers = {"Authorization": f"Bearer {owner_token}"}
+    channel = _create_channel(client, tenant["id"], name="企业微信客服")
+    contact = _create_contact(client, tenant["id"], name="企微测试用户")
+    conversation, _message = _create_conversation_with_inbound(
+        client,
+        db_session,
+        tenant_id=tenant["id"],
+        channel_id=channel["id"],
+        contact_id=contact["id"],
+        subject="企微客户咨询",
+        content="请帮我关闭前给个提醒",
+        minutes_old=1,
+        headers=headers,
+    )
+
+    close_res = client.post(
+        f"/api/conversations/{conversation['id']}/workflow-actions",
+        headers=headers,
+        json={"action": "close", "note": "关闭当前企微测试会话"},
+    )
+
+    assert close_res.status_code == 200
+    assert close_res.json()["status"] == "closed"
+    close_message = db_session.scalar(
+        select(Message)
+        .where(Message.conversation_id == conversation["id"], Message.sender_type == "system")
+        .order_by(Message.id.desc())
+    )
+    assert close_message is not None
+    assert close_message.direction == "outbound"
+    assert close_message.content == "客服已关闭对话，本次咨询已结束。"
+    delivery_event = db_session.scalar(
+        select(ConversationEvent)
+        .where(
+            ConversationEvent.conversation_id == conversation["id"],
+            ConversationEvent.event_type == "conversation.customer_notice_delivery",
+        )
+        .order_by(ConversationEvent.id.desc())
+    )
+    assert delivery_event is None

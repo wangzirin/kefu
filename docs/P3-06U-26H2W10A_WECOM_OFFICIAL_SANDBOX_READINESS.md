@@ -36,7 +36,7 @@
 
 ## 输出
 
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w10a_waits_for_real_wec0/summary.json`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w10a_waits_for_real_wec0\summary.json`
 
 ## 边界
 

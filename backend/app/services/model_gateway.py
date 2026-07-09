@@ -6,12 +6,13 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.core.config import Settings, get_settings
+from app.services.model_service_config import SILICONFLOW_PROVIDER, get_siliconflow_model_service_config
 
 
 MODEL_GATEWAY_VERSION = "model_gateway_v1"
 DETERMINISTIC_PROVIDER = "deterministic"
 DETERMINISTIC_MODEL = "deterministic-local-draft-v1"
-OPENAI_COMPATIBLE_PROVIDERS = {"bailian", "deepseek"}
+OPENAI_COMPATIBLE_PROVIDERS = {"bailian", "deepseek", SILICONFLOW_PROVIDER}
 SIMPLE_INTENTS = {"greeting", "small_talk", "navigation", "business_hours", "simple_faq"}
 SIMPLE_TERMS = {"你好", "您好", "在吗", "有人吗", "谢谢", "感谢", "早上好", "晚上好"}
 HIGH_RISK_TERMS = {
@@ -167,6 +168,8 @@ def _explicit_provider_model(provider: str, requested_model: str, settings: Sett
         return settings.bailian_model
     if provider == "deepseek":
         return settings.deepseek_model
+    if provider == SILICONFLOW_PROVIDER:
+        return get_siliconflow_model_service_config(settings).llm_model
     return requested_model
 
 
@@ -207,6 +210,24 @@ def select_model_route(
             fallback_chain=_fallback_chain(settings, tier),
             human_review_required=human_review_required,
             reasons=reasons + [f"explicit_provider={provider}"],
+        )
+
+    siliconflow = get_siliconflow_model_service_config(settings)
+    if siliconflow.api_key_configured:
+        return ModelRouteDecision(
+            provider=SILICONFLOW_PROVIDER,
+            model=requested_model or siliconflow.llm_model,
+            route_name="siliconflow_support",
+            complexity=complexity,
+            target_model_tier=tier,
+            fallback_chain=[
+                f"{SILICONFLOW_PROVIDER}:{siliconflow.llm_model}",
+                f"bailian:{_bailian_model_for_tier(settings, tier)}",
+                f"deepseek:{settings.deepseek_fallback_model or settings.deepseek_model}",
+                f"{DETERMINISTIC_PROVIDER}:{DETERMINISTIC_MODEL}",
+            ],
+            human_review_required=human_review_required,
+            reasons=reasons + ["primary_provider=siliconflow"],
         )
 
     if settings.bailian_api_key:
@@ -313,6 +334,9 @@ def _provider_credentials(provider: str, settings: Settings) -> tuple[str, str, 
         return settings.bailian_api_base, settings.bailian_api_key, settings.bailian_model
     if provider == "deepseek":
         return settings.deepseek_api_base, settings.deepseek_api_key, settings.deepseek_model
+    if provider == SILICONFLOW_PROVIDER:
+        siliconflow = get_siliconflow_model_service_config(settings)
+        return siliconflow.base_url, siliconflow.api_key, siliconflow.llm_model
     raise ValueError(f"unsupported provider: {provider}")
 
 
@@ -321,6 +345,8 @@ def _resolve_provider(provider: str, settings: Settings) -> str:
         return provider
     if settings.bailian_api_key:
         return "bailian"
+    if get_siliconflow_model_service_config(settings).api_key_configured:
+        return SILICONFLOW_PROVIDER
     if settings.deepseek_api_key:
         return "deepseek"
     return DETERMINISTIC_PROVIDER
@@ -358,6 +384,8 @@ def _openai_compatible_draft(
         ],
         "temperature": request.temperature,
     }
+    if provider == SILICONFLOW_PROVIDER:
+        payload.update({"enable_thinking": False, "max_tokens": 512})
     endpoint = base_url.rstrip("/") + "/chat/completions"
     http_request = Request(
         endpoint,

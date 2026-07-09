@@ -34,7 +34,7 @@ _PROVIDER_CONTRACTS = {
         inbound_event_types=["verification_echo", "message", "customer_event"],
         capabilities={
             "receive_webhook": True,
-            "external_write_enabled": False,
+            "external_write_enabled": True,
             "requires_official_authorization": True,
             "supports_encrypted_payload": True,
             "supports_delivery_receipt": True,
@@ -49,7 +49,7 @@ _PROVIDER_CONTRACTS = {
             "required_public_fields": ["enterprise_name", "corp_id", "callback_url"],
             "validated_in_current_stage": True,
             "fixture_validation_in_current_stage": True,
-            "notes": "已支持微信客服 URL 验证、AES 解密、XML 文本消息解析和可信入站消息创建；真实发送 API、access_token 缓存和外部写入仍未打开。",
+            "notes": "支持微信客服 URL 验证、AES 解密、XML 文本消息解析、可信入站消息创建和文本外发；真实外发仍受全局、渠道和账号白名单门禁控制。",
         },
         inbound_event_contract={
             "raw_payload_retained": True,
@@ -67,7 +67,7 @@ _PROVIDER_CONTRACTS = {
         inbound_event_types=["verification_echo", "message", "delivery_receipt", "customer_event"],
         capabilities={
             "receive_webhook": True,
-            "external_write_enabled": False,
+            "external_write_enabled": True,
             "requires_official_authorization": True,
             "supports_encrypted_payload": True,
             "supports_delivery_receipt": True,

@@ -216,6 +216,98 @@ def test_verified_wecom_message_webhook_creates_trusted_inbound_message(client) 
     assert "channel_webhook.trusted_inbound_message_created" in actions
 
 
+def test_verified_wecom_message_after_close_does_not_reopen_conversation(client) -> None:
+    tenant, token = _bootstrap_owner(
+        client,
+        slug="webhook-closed-block",
+        email="webhook-closed-block@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    channel = _create_channel(client, tenant["id"])
+    _create_connector(
+        client,
+        channel["id"],
+        headers,
+        public_config={
+            "corp_id_placeholder": "fixture_only",
+            "credential_ref": "p2_13_wecom_fixture",
+        },
+    )
+
+    timestamp = _fresh_timestamp()
+    nonce = "nonce-closed-first"
+    encrypt = "fixture-wecom-closed-first"
+    signature = _sha1_sorted_signature("p2_13_wecom_token", timestamp, nonce, encrypt)
+    first = client.post(
+        f"/api/webhooks/wecom/channels/{channel['id']}?msg_signature={signature}&timestamp={timestamp}&nonce={nonce}",
+        json={
+            "event_type": "message",
+            "external_message_id": "wecom-message-closed-first",
+            "delivery_status": "received",
+            "provider_event_id": "wecom-event-closed-first",
+            "raw_payload": {
+                "Encrypt": encrypt,
+                "MsgID": "wecom-message-closed-first",
+                "FromUserName": "external-user-closed-block",
+                "Content": "第一条进线",
+            },
+        },
+    ).json()
+    conversation_id = first["parsed_event"]["conversation_id"]
+
+    close_res = client.post(
+        f"/api/conversations/{conversation_id}/workflow-actions",
+        headers=headers,
+        json={"action": "close", "note": "关闭当前企微会话"},
+    )
+    assert close_res.status_code == 200
+    assert close_res.json()["status"] == "closed"
+
+    timestamp = _fresh_timestamp()
+    nonce = "nonce-closed-second"
+    encrypt = "fixture-wecom-closed-second"
+    signature = _sha1_sorted_signature("p2_13_wecom_token", timestamp, nonce, encrypt)
+    second_res = client.post(
+        f"/api/webhooks/wecom/channels/{channel['id']}?msg_signature={signature}&timestamp={timestamp}&nonce={nonce}",
+        json={
+            "event_type": "message",
+            "external_message_id": "wecom-message-closed-second",
+            "delivery_status": "received",
+            "provider_event_id": "wecom-event-closed-second",
+            "raw_payload": {
+                "Encrypt": encrypt,
+                "MsgID": "wecom-message-closed-second",
+                "FromUserName": "external-user-closed-block",
+                "Content": "关闭后继续发",
+            },
+        },
+    )
+
+    assert second_res.status_code == 202
+    second = second_res.json()
+    assert second["parsed_event"]["status"] == "closed_conversation_inbound_blocked"
+    assert second["parsed_event"]["idempotency_status"] == "blocked_after_close"
+    assert second["parsed_event"]["trusted_message_creation"] is False
+    assert second["parsed_event"]["trusted_message_id"] is None
+    assert second["parsed_event"]["conversation_id"] == conversation_id
+    assert second["next_action"] == "conversation_closed_ignore_inbound_until_reopened_by_operator"
+
+    conversations = client.get(
+        f"/api/tenants/{tenant['id']}/conversations?channel_id={channel['id']}",
+        headers=headers,
+    ).json()
+    assert [item["id"] for item in conversations] == [conversation_id]
+    detail = client.get(f"/api/conversations/{conversation_id}", headers=headers).json()
+    assert [message["content"] for message in detail["messages"]] == [
+        "第一条进线",
+        "客服已关闭对话，本次咨询已结束。",
+    ]
+
+    audit_res = client.get(f"/api/tenants/{tenant['id']}/audit-events", headers=headers)
+    actions = [item["action"] for item in audit_res.json()]
+    assert "channel_webhook.closed_conversation_inbound_blocked" in actions
+
+
 def test_verified_wecom_message_webhook_replay_does_not_duplicate_message(client) -> None:
     tenant, token = _bootstrap_owner(
         client,

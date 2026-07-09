@@ -29,7 +29,7 @@
 
 ## 输出
 
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-628/test_pack1_accepts_safe_custom0/out/summary.json`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_pack1_accepts_safe_custom0\out\summary.json`
 
 ## 边界
 

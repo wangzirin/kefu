@@ -17,6 +17,8 @@ class WebhookSecretMaterial:
     credential_ref: str
     token: str = ""
     encoding_aes_key: str = ""
+    app_secret: str = ""
+    open_kfid: str = ""
     webhook_signing_secret: str = ""
     receiver_id: str = ""
     source: str = "fixture"
@@ -122,6 +124,19 @@ def clear_local_connector_secrets(*, credential_ref: str) -> None:
         _write_local_secret_store(store)
 
 
+def resolve_local_connector_secret_value(*, credential_ref: str, secret_key: str) -> str:
+    encrypted = _read_local_secret_store().get(credential_ref)
+    if not isinstance(encrypted, dict):
+        return ""
+    value = encrypted.get(secret_key)
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        return _decrypt_secret(value)
+    except Exception:
+        return ""
+
+
 def _resolve_local_secret_material(*, provider: str, credential_ref: str) -> WebhookSecretResolution:
     encrypted = _read_local_secret_store().get(credential_ref)
     if not isinstance(encrypted, dict):
@@ -136,6 +151,8 @@ def _resolve_local_secret_material(*, provider: str, credential_ref: str) -> Web
         credential_ref=credential_ref,
         token=secrets.get("token", "") or secrets.get("callback_token", ""),
         encoding_aes_key=secrets.get("encoding_aes_key", "") or secrets.get("encodingAESKey", ""),
+        app_secret=secrets.get("app_secret", "") or secrets.get("secret", ""),
+        open_kfid=secrets.get("open_kfid", "") or secrets.get("kf_id", ""),
         webhook_signing_secret=secrets.get("webhook_signing_secret", "") or secrets.get("signing_secret", ""),
         receiver_id=secrets.get("receiver_id", "") or secrets.get("corp_id", "") or secrets.get("app_id", ""),
         source="local_encrypted",
@@ -146,6 +163,13 @@ def _resolve_local_secret_material(*, provider: str, credential_ref: str) -> Web
             missing_fields.append("token")
         if normalized_provider != "wechat_miniapp" and not material.encoding_aes_key:
             missing_fields.append("encoding_aes_key")
+        if normalized_provider == "wechat_kf":
+            if not material.receiver_id:
+                missing_fields.append("corp_id")
+            if not material.app_secret:
+                missing_fields.append("app_secret")
+            if not material.open_kfid:
+                missing_fields.append("open_kfid")
     elif normalized_provider == "website" and not material.webhook_signing_secret:
         missing_fields.append("webhook_signing_secret")
     if missing_fields:
@@ -163,7 +187,7 @@ def _resolve_env_secret_material(*, provider: str, credential_ref: str) -> Webho
 
     normalized_provider = normalize_provider(provider)
     receiver_id = _env_first(f"{prefix}_RECEIVER_ID", f"{prefix}_CORP_ID", f"{prefix}_APP_ID")
-    if normalize_provider(provider) == "wecom":
+    if normalize_provider(provider) in {"wecom", "wechat_kf"}:
         receiver_id = receiver_id or _env_first("WECOM_CORP_ID")
     material = WebhookSecretMaterial(
         provider=normalized_provider,
@@ -174,6 +198,8 @@ def _resolve_env_secret_material(*, provider: str, credential_ref: str) -> Webho
             f"{prefix}_ENCODINGAESKEY",
             f"{prefix}_AES_KEY",
         ),
+        app_secret=_env_first(f"{prefix}_APP_SECRET", f"{prefix}_SECRET", f"{prefix}_CORP_SECRET"),
+        open_kfid=_env_first(f"{prefix}_OPEN_KFID", f"{prefix}_KF_ID"),
         webhook_signing_secret=_env_first(f"{prefix}_WEBHOOK_SIGNING_SECRET", f"{prefix}_SIGNING_SECRET"),
         receiver_id=receiver_id,
         source="env",
@@ -184,6 +210,13 @@ def _resolve_env_secret_material(*, provider: str, credential_ref: str) -> Webho
             missing_fields.append(f"{prefix}_TOKEN")
         if not material.encoding_aes_key:
             missing_fields.append(f"{prefix}_ENCODING_AES_KEY")
+    elif normalized_provider == "wechat_kf":
+        if not material.receiver_id:
+            missing_fields.append(f"{prefix}_CORP_ID")
+        if not material.app_secret:
+            missing_fields.append(f"{prefix}_SECRET")
+        if not material.open_kfid:
+            missing_fields.append(f"{prefix}_OPEN_KFID")
     elif normalized_provider == "website" and not material.webhook_signing_secret:
         missing_fields.append(f"{prefix}_WEBHOOK_SIGNING_SECRET")
     else:

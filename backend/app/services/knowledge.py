@@ -5,11 +5,13 @@ import html
 import io
 import json
 import math
+import os
 import re
 import zipfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -17,7 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from fastapi import HTTPException, status
-from sqlalchemy import String, cast, delete, func, or_, select, text
+from sqlalchemy import String, cast, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.api.tenants import require_tenant
@@ -50,6 +52,7 @@ from app.models import (
     User,
 )
 from app.models.foundation import utc_now
+from app.services.model_gateway import ModelDraftKnowledge, ModelDraftRequest, generate_reply_draft
 from app.schemas.knowledge import (
     BusinessObjectCreate,
     BusinessObjectList,
@@ -84,6 +87,7 @@ from app.schemas.knowledge import (
     KnowledgeDocumentSearchMatch,
     KnowledgeDocumentSearchRequest,
     KnowledgeDocumentSearchResponse,
+    KnowledgeDocumentUpdate,
     KnowledgeEmbeddingProviderSmokeCreate,
     KnowledgeEmbeddingProviderSmokeRead,
     KnowledgeEvaluationCaseCreate,
@@ -152,14 +156,24 @@ from app.schemas.knowledge import (
     ObjectKnowledgeCardRead,
 )
 from app.services.local_maintenance import build_local_maintenance_readiness
+from app.services.model_service_config import (
+    SILICONFLOW_PROVIDER,
+    get_siliconflow_model_service_config,
+)
 
 
 RETRIEVAL_MODE = "lexical_bm25_v1"
 DOCUMENT_RETRIEVAL_MODE = "hybrid_bm25_vector_rerank_v1"
+KNOWLEDGE_CATEGORY_TAG_PREFIX = "分类:"
 DETERMINISTIC_EMBEDDING_PROVIDER = "deterministic_local"
 DETERMINISTIC_EMBEDDING_MODEL = "deterministic-token-vector-v1"
 DETERMINISTIC_VECTOR_ENGINE = "deterministic_local_hash_embedding_v1"
 OPENAI_COMPATIBLE_EMBEDDING_PROVIDER = "openai_compatible"
+SILICONFLOW_EMBEDDING_PROVIDER = SILICONFLOW_PROVIDER
+LOCAL_BGE_M3_EMBEDDING_PROVIDER = "local_bge_m3"
+LOCAL_BGE_M3_EMBEDDING_MODEL = "BAAI/bge-m3"
+LOCAL_BGE_M3_VECTOR_ENGINE = "flagembedding_bge_m3_dense_v1"
+LOCAL_BGE_M3_DIMENSIONS = 1024
 DEFAULT_VECTOR_STORE = "sqlite_json_vector_store"
 PGVECTOR_VECTOR_STORE = "postgres_pgvector_store_v1"
 PGVECTOR_VECTOR_STORE_ALIASES = {"pgvector", "postgres_pgvector", PGVECTOR_VECTOR_STORE}
@@ -346,6 +360,51 @@ def _clean_string_list(values: list[str]) -> list[str]:
     return cleaned
 
 
+def _knowledge_category_from_tags(tags: list[str] | None) -> str:
+    for tag in tags or []:
+        item = str(tag).strip()
+        if item.startswith(KNOWLEDGE_CATEGORY_TAG_PREFIX):
+            return item[len(KNOWLEDGE_CATEGORY_TAG_PREFIX) :].strip()
+    return ""
+
+
+def _knowledge_tags_with_category(tags: list[str], category: str) -> list[str]:
+    cleaned = [tag for tag in _clean_string_list(tags) if not tag.startswith(KNOWLEDGE_CATEGORY_TAG_PREFIX)]
+    category_value = category.strip()
+    if category_value:
+        cleaned.insert(0, f"{KNOWLEDGE_CATEGORY_TAG_PREFIX}{category_value[:120]}")
+    return cleaned
+
+
+def _knowledge_document_read(document: KnowledgeDocument) -> dict[str, Any]:
+    return {
+        "id": document.id,
+        "tenant_id": document.tenant_id,
+        "title": document.title,
+        "source_type": document.source_type,
+        "source_uri": document.source_uri,
+        "category": _knowledge_category_from_tags(document.tags),
+        "raw_text": document.raw_text,
+        "content_hash": document.content_hash,
+        "tags": document.tags,
+        "status": document.status,
+        "ingestion_status": document.ingestion_status,
+        "chunk_count": document.chunk_count,
+        "created_by_id": document.created_by_id,
+        "updated_by_id": document.updated_by_id,
+        "created_at": document.created_at,
+        "updated_at": document.updated_at,
+    }
+
+
+def _knowledge_document_index_text(*, title: str, raw_text: str) -> str:
+    title_value = title.strip()
+    answer_value = raw_text.strip()
+    if not title_value:
+        return answer_value
+    return f"问题：{title_value}\n答案：{answer_value}"
+
+
 def _template_list(value: list[str] | str) -> list[str]:
     if isinstance(value, str):
         return _clean_string_list(re.split(r"[,，;；|、\n]+", value))
@@ -489,8 +548,44 @@ def _tokenize(text: str) -> list[str]:
     return tokens
 
 
+QUERY_STOP_TERMS = {
+    "什么",
+    "时候",
+    "什么时候",
+    "怎么",
+    "怎样",
+    "如何",
+    "多少",
+    "你们",
+    "我们",
+    "一下",
+    "这个",
+    "那个",
+    "问题",
+    "可以",
+    "有没有",
+}
+
+QUERY_SYNONYM_GROUPS = (
+    ({"上班", "开门", "营业", "营业时间", "工作时间", "上班时间", "几点开", "几点营业"}, {"营业时间", "工作时间", "上班时间", "开门时间", "营业", "上班"}),
+    ({"下班", "关门", "打烊", "结束营业"}, {"下班时间", "关门时间", "打烊时间", "营业时间"}),
+    ({"地址", "位置", "在哪", "哪里", "门店"}, {"门店地址", "门店位置", "地址", "位置"}),
+    ({"电话", "联系方式", "联系", "客服"}, {"联系电话", "联系方式", "客服电话", "客服"}),
+)
+
+
+def _expand_query_for_retrieval(query: str) -> str:
+    expanded_terms: list[str] = []
+    for triggers, expansions in QUERY_SYNONYM_GROUPS:
+        if any(trigger in query for trigger in triggers):
+            expanded_terms.extend(sorted(expansions))
+    if not expanded_terms:
+        return query
+    return " ".join([query, *expanded_terms])
+
+
 def _meaningful_terms(terms: set[str]) -> set[str]:
-    return {term for term in terms if len(term) >= 2 or term.isascii()}
+    return {term for term in terms if (len(term) >= 2 or term.isascii()) and term not in QUERY_STOP_TERMS}
 
 
 def _card_tokens(card: KnowledgeCard) -> list[str]:
@@ -856,18 +951,34 @@ def _write_pgvector_chunk_vector(db: Session, *, chunk_id: int, vector: list[flo
 def _resolve_embedding_profile(settings: Settings | None = None) -> EmbeddingProfile:
     settings = settings or get_settings()
     provider = (settings.knowledge_embedding_provider or DETERMINISTIC_EMBEDDING_PROVIDER).strip()
+    siliconflow = get_siliconflow_model_service_config(settings)
+    if provider == DETERMINISTIC_EMBEDDING_PROVIDER and not os.getenv("KNOWLEDGE_EMBEDDING_PROVIDER") and siliconflow.api_key_configured:
+        provider = SILICONFLOW_EMBEDDING_PROVIDER
     if provider == "auto":
-        provider = (
-            OPENAI_COMPATIBLE_EMBEDDING_PROVIDER
-            if settings.knowledge_embedding_api_key and settings.knowledge_embedding_api_base
-            else DETERMINISTIC_EMBEDDING_PROVIDER
-        )
+        if siliconflow.api_key_configured:
+            provider = SILICONFLOW_EMBEDDING_PROVIDER
+        else:
+            provider = (
+                OPENAI_COMPATIBLE_EMBEDDING_PROVIDER
+                if settings.knowledge_embedding_api_key and settings.knowledge_embedding_api_base
+                else DETERMINISTIC_EMBEDDING_PROVIDER
+            )
     if provider == DETERMINISTIC_EMBEDDING_PROVIDER:
         model = settings.knowledge_embedding_model or DETERMINISTIC_EMBEDDING_MODEL
         if model == DETERMINISTIC_EMBEDDING_MODEL:
             vector_engine = DETERMINISTIC_VECTOR_ENGINE
         else:
             vector_engine = f"{DETERMINISTIC_VECTOR_ENGINE}:{model}"
+        dimensions = max(8, settings.knowledge_embedding_dimensions)
+    elif provider == LOCAL_BGE_M3_EMBEDDING_PROVIDER:
+        configured_model = settings.knowledge_embedding_model
+        model = (
+            LOCAL_BGE_M3_EMBEDDING_MODEL
+            if not configured_model or configured_model == DETERMINISTIC_EMBEDDING_MODEL
+            else configured_model
+        )
+        vector_engine = LOCAL_BGE_M3_VECTOR_ENGINE
+        dimensions = LOCAL_BGE_M3_DIMENSIONS
     elif provider == OPENAI_COMPATIBLE_EMBEDDING_PROVIDER:
         configured_model = settings.knowledge_embedding_model
         model = (
@@ -876,16 +987,22 @@ def _resolve_embedding_profile(settings: Settings | None = None) -> EmbeddingPro
             else configured_model
         )
         vector_engine = "openai_compatible_embedding_v1"
+        dimensions = max(8, settings.knowledge_embedding_dimensions)
+    elif provider == SILICONFLOW_EMBEDDING_PROVIDER:
+        model = siliconflow.embedding_model
+        vector_engine = "siliconflow_openai_embeddings_v1"
+        dimensions = 1024 if settings.knowledge_embedding_dimensions == 64 else max(8, settings.knowledge_embedding_dimensions)
     else:
         model = settings.knowledge_embedding_model
         vector_engine = f"unsupported_embedding_provider:{provider}"
+        dimensions = max(8, settings.knowledge_embedding_dimensions)
     return EmbeddingProfile(
         provider=provider,
         model=model,
         vector_engine=vector_engine,
         vector_store=_normalize_vector_store(settings.knowledge_vector_store),
         reranker=settings.knowledge_reranker or DEFAULT_RERANKER,
-        dimensions=max(8, settings.knowledge_embedding_dimensions),
+        dimensions=dimensions,
         api_base=settings.knowledge_embedding_api_base,
         api_key=settings.knowledge_embedding_api_key,
     )
@@ -907,6 +1024,29 @@ def _embedding_signature(
         "vector_hash": vector_hash,
         "terms": terms,
     }
+
+
+@lru_cache(maxsize=2)
+def _load_bge_m3_model(model_name: str) -> Any:
+    try:
+        from FlagEmbedding import BGEM3FlagModel
+    except ImportError as exc:
+        raise RuntimeError(
+            "FlagEmbedding is not installed. Install the backend embedding extra "
+            "before enabling KNOWLEDGE_EMBEDDING_PROVIDER=local_bge_m3."
+        ) from exc
+    return BGEM3FlagModel(model_name, use_fp16=False)
+
+
+def _dense_vector_from_bge_output(output: Any) -> list[float]:
+    dense_vector = output.get("dense_vecs") if isinstance(output, dict) else output
+    if hasattr(dense_vector, "tolist"):
+        dense_vector = dense_vector.tolist()
+    if dense_vector and isinstance(dense_vector, list) and isinstance(dense_vector[0], list):
+        dense_vector = dense_vector[0]
+    if not isinstance(dense_vector, list) or not dense_vector:
+        raise ValueError("missing dense_vecs in BGE-M3 embedding output")
+    return [float(value) for value in dense_vector]
 
 
 def _embed_text(text: str, *, settings: Settings | None = None) -> EmbeddingResult:
@@ -935,7 +1075,59 @@ def _embed_text(text: str, *, settings: Settings | None = None) -> EmbeddingResu
             provider_call_performed=False,
             response_metadata={"usage": {"estimated_input_tokens": estimated_input_tokens}},
         )
-    if profile.provider != OPENAI_COMPATIBLE_EMBEDDING_PROVIDER:
+    if profile.provider == LOCAL_BGE_M3_EMBEDDING_PROVIDER:
+        started_at = perf_counter()
+        try:
+            model = _load_bge_m3_model(profile.model)
+            output = model.encode([text], return_dense=True, return_sparse=False, return_colbert_vecs=False)
+            vector = _dense_vector_from_bge_output(output)
+            return EmbeddingResult(
+                profile=profile,
+                vector=vector,
+                terms=terms,
+                status="indexed",
+                input_character_count=input_character_count,
+                estimated_input_tokens=estimated_input_tokens,
+                latency_ms=max(0, int((perf_counter() - started_at) * 1000)),
+                pricing_input_per_1k_tokens=pricing,
+                estimated_cost=_embedding_cost(estimated_input_tokens=estimated_input_tokens, settings=settings),
+                cost_currency=cost_currency,
+                provider_call_performed=False,
+                response_metadata={
+                    "usage": {"estimated_input_tokens": estimated_input_tokens},
+                    "local_model": profile.model,
+                    "runtime": "FlagEmbedding.BGEM3FlagModel",
+                },
+            )
+        except (RuntimeError, ValueError, OSError) as exc:
+            return EmbeddingResult(
+                profile=profile,
+                vector=[],
+                terms=terms,
+                status="unavailable",
+                error_message=str(exc)[:500],
+                input_character_count=input_character_count,
+                estimated_input_tokens=estimated_input_tokens,
+                latency_ms=max(0, int((perf_counter() - started_at) * 1000)),
+                pricing_input_per_1k_tokens=pricing,
+                estimated_cost=_embedding_cost(estimated_input_tokens=estimated_input_tokens, settings=settings),
+                cost_currency=cost_currency,
+                provider_call_performed=False,
+                response_metadata={"usage": {"estimated_input_tokens": estimated_input_tokens}},
+            )
+    if profile.provider == SILICONFLOW_EMBEDDING_PROVIDER:
+        siliconflow = get_siliconflow_model_service_config(settings)
+        profile = EmbeddingProfile(
+            provider=profile.provider,
+            model=siliconflow.embedding_model,
+            vector_engine=profile.vector_engine,
+            vector_store=profile.vector_store,
+            reranker=profile.reranker,
+            dimensions=profile.dimensions,
+            api_base=siliconflow.base_url,
+            api_key=siliconflow.api_key,
+        )
+    if profile.provider not in {OPENAI_COMPATIBLE_EMBEDDING_PROVIDER, SILICONFLOW_EMBEDDING_PROVIDER}:
         return EmbeddingResult(
             profile=profile,
             vector=[],
@@ -1105,6 +1297,68 @@ def _chunk_read(document: KnowledgeDocument, chunk: KnowledgeDocumentChunk) -> K
         citation=_chunk_citation(document=document, chunk=chunk),
         created_at=chunk.created_at,
     )
+
+
+def _siliconflow_rerank_matches(
+    *,
+    query: str,
+    matches: list[KnowledgeDocumentSearchMatch],
+    settings: Settings,
+) -> list[KnowledgeDocumentSearchMatch]:
+    if not matches:
+        return matches
+    siliconflow = get_siliconflow_model_service_config(settings)
+    if not siliconflow.api_key_configured:
+        return matches
+    payload = {
+        "model": siliconflow.reranker_model,
+        "query": query,
+        "documents": [match.content_preview for match in matches],
+    }
+    request = Request(
+        siliconflow.base_url.rstrip("/") + "/rerank",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {siliconflow.api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=settings.model_http_timeout_seconds) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        return matches
+    rows = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return matches
+    indexed = {index: match for index, match in enumerate(matches)}
+    reranked: list[KnowledgeDocumentSearchMatch] = []
+    used: set[int] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            index = int(row.get("index"))
+            relevance = float(row.get("relevance_score", row.get("score", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        match = indexed.get(index)
+        if match is None:
+            continue
+        used.add(index)
+        reranked.append(
+            match.model_copy(
+                update={
+                    "score": round(match.score + max(0.0, relevance) * 3.0, 4),
+                    "confidence": max(match.confidence, _confidence_from_score(max(match.score, relevance * 3.0))),
+                    "reranker_score": round(max(match.reranker_score, relevance), 4),
+                }
+            )
+        )
+    reranked.extend(match for index, match in indexed.items() if index not in used)
+    reranked.sort(key=lambda match: (match.score, match.confidence, -match.chunk_index), reverse=True)
+    return reranked
 
 
 def _evaluation_cases_for_set(
@@ -7222,12 +7476,13 @@ def create_knowledge_document(
     _require_same_tenant(db, tenant_id, principal)
     _require_knowledge_manager(principal)
     raw_text = payload.raw_text.strip()
+    index_text = _knowledge_document_index_text(title=payload.title, raw_text=raw_text)
     now = utc_now()
     settings = get_settings()
     profile = _resolve_embedding_profile(settings)
     _require_vector_store_available(profile, db)
     chunks = _split_document_chunks(
-        raw_text,
+        index_text,
         chunk_size=payload.chunk_size,
         chunk_overlap=payload.chunk_overlap,
     )
@@ -7245,7 +7500,7 @@ def create_knowledge_document(
         source_uri=payload.source_uri.strip(),
         raw_text=raw_text,
         content_hash=_content_hash(raw_text),
-        tags=_clean_string_list(payload.tags),
+        tags=_knowledge_tags_with_category(payload.tags, payload.category),
         status=payload.status,
         ingestion_status="indexing",
         chunk_count=0,
@@ -7330,14 +7585,182 @@ def list_knowledge_documents(
     if status_filter:
         query = query.where(KnowledgeDocument.status == status_filter)
         count_query = count_query.where(KnowledgeDocument.status == status_filter)
+    else:
+        query = query.where(KnowledgeDocument.status != "archived")
+        count_query = count_query.where(KnowledgeDocument.status != "archived")
     query = query.order_by(KnowledgeDocument.updated_at.desc(), KnowledgeDocument.id.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     return KnowledgeDocumentList(
-        items=list(db.scalars(query).all()),
+        items=[_knowledge_document_read(document) for document in db.scalars(query).all()],
         page=page,
         page_size=page_size,
         total=int(db.scalar(count_query) or 0),
     )
+
+
+def _rebuild_knowledge_document_chunks(db: Session, document: KnowledgeDocument, settings: Settings) -> None:
+    profile = _resolve_embedding_profile(settings)
+    _require_vector_store_available(profile, db)
+    index_text = _knowledge_document_index_text(title=document.title, raw_text=document.raw_text)
+    chunks = _split_document_chunks(index_text, chunk_size=900, chunk_overlap=120)
+    chunk_embeddings: list[tuple[dict, list[str], EmbeddingResult]] = []
+    for chunk_data in chunks:
+        tokens = _tokenize(chunk_data["content"])
+        embedding = _embed_text(chunk_data["content"], settings=settings)
+        _require_embedding_available(embedding)
+        chunk_embeddings.append((chunk_data, tokens, embedding))
+
+    db.execute(
+        delete(KnowledgeDocumentChunk).where(
+            KnowledgeDocumentChunk.tenant_id == document.tenant_id,
+            KnowledgeDocumentChunk.document_id == document.id,
+        )
+    )
+    db.flush()
+    for index, (chunk_data, tokens, embedding) in enumerate(chunk_embeddings):
+        terms = _token_vector(tokens)
+        chunk = KnowledgeDocumentChunk(
+            tenant_id=document.tenant_id,
+            document_id=document.id,
+            chunk_index=index,
+            section_title=chunk_data["section_title"][:180],
+            page_number=None,
+            content=chunk_data["content"],
+            content_hash=_content_hash(chunk_data["content"]),
+            source_uri=document.source_uri,
+            char_start=chunk_data["char_start"],
+            char_end=chunk_data["char_end"],
+            token_count=len(tokens),
+            embedding_signature=_embedding_signature(embedding, terms=terms),
+            embedding_vector=embedding.vector,
+            embedding_provider=embedding.profile.provider,
+            embedding_model=embedding.profile.model,
+            embedding_dimension=len(embedding.vector),
+            vector_store=embedding.profile.vector_store,
+            vector_index_status=embedding.status,
+            status=document.status,
+            created_at=utc_now(),
+        )
+        db.add(chunk)
+        db.flush()
+        if _is_pgvector_store(embedding.profile.vector_store):
+            _write_pgvector_chunk_vector(db, chunk_id=chunk.id, vector=embedding.vector)
+    document.chunk_count = len(chunks)
+    document.ingestion_status = "indexed"
+
+
+def update_knowledge_document(
+    db: Session,
+    document_id: int,
+    payload: KnowledgeDocumentUpdate,
+    principal: CurrentPrincipal,
+) -> dict[str, Any]:
+    document = _knowledge_document_or_404(db, document_id, principal)
+    _require_knowledge_manager(principal)
+    changed: dict[str, Any] = {}
+    now = utc_now()
+    needs_reindex = False
+    if payload.title is not None:
+        document.title = payload.title.strip()
+        changed["title"] = document.title
+        needs_reindex = True
+    if payload.source_uri is not None:
+        document.source_uri = payload.source_uri.strip()
+        changed["source_uri"] = document.source_uri
+        needs_reindex = True
+    if payload.raw_text is not None:
+        document.raw_text = payload.raw_text.strip()
+        document.content_hash = _content_hash(document.raw_text)
+        changed["raw_text_updated"] = True
+        needs_reindex = True
+    if payload.tags is not None:
+        category = payload.category if payload.category is not None else _knowledge_category_from_tags(document.tags)
+        document.tags = _knowledge_tags_with_category(payload.tags, category)
+        changed["tags"] = document.tags
+    if payload.category is not None:
+        document.tags = _knowledge_tags_with_category(document.tags, payload.category)
+        changed["category"] = _knowledge_category_from_tags(document.tags)
+    if payload.status is not None:
+        document.status = payload.status
+        for chunk in db.scalars(
+            select(KnowledgeDocumentChunk).where(
+                KnowledgeDocumentChunk.tenant_id == document.tenant_id,
+                KnowledgeDocumentChunk.document_id == document.id,
+            )
+        ):
+            chunk.status = payload.status
+        changed["status"] = payload.status
+    if needs_reindex:
+        document.ingestion_status = "indexing"
+        _rebuild_knowledge_document_chunks(db, document, get_settings())
+        changed["reindexed"] = True
+    document.updated_by_id = principal.user.id
+    document.updated_at = now
+    add_audit_event(
+        db,
+        tenant_id=document.tenant_id,
+        actor_id=principal.user.id,
+        action="knowledge_document.updated",
+        resource_type="knowledge_document",
+        resource_id=str(document.id),
+        payload={"changes": changed, "secret_included": False},
+    )
+    db.commit()
+    db.refresh(document)
+    return _knowledge_document_read(document)
+
+
+def delete_knowledge_document(
+    db: Session,
+    document_id: int,
+    principal: CurrentPrincipal,
+) -> dict[str, Any]:
+    document = _knowledge_document_or_404(db, document_id, principal)
+    _require_knowledge_manager(principal)
+    snapshot = _knowledge_document_read(document)
+    chunk_ids = list(
+        db.scalars(
+            select(KnowledgeDocumentChunk.id).where(
+                KnowledgeDocumentChunk.tenant_id == document.tenant_id,
+                KnowledgeDocumentChunk.document_id == document.id,
+            )
+        ).all()
+    )
+    if chunk_ids:
+        db.execute(
+            update(ReplyCitationSnapshot)
+            .where(ReplyCitationSnapshot.document_chunk_id.in_(chunk_ids))
+            .values(document_chunk_id=None)
+        )
+    db.execute(
+        update(ReplyCitationSnapshot)
+        .where(ReplyCitationSnapshot.document_id == document.id)
+        .values(document_id=None)
+    )
+    db.execute(
+        update(KnowledgeGapItem)
+        .where(KnowledgeGapItem.linked_knowledge_document_id == document.id)
+        .values(linked_knowledge_document_id=None)
+    )
+    db.execute(
+        update(KnowledgeVectorIndexPlan)
+        .where(KnowledgeVectorIndexPlan.document_id == document.id)
+        .values(document_id=None)
+    )
+    db.execute(delete(KnowledgeDocumentPublication).where(KnowledgeDocumentPublication.document_id == document.id))
+    db.execute(delete(KnowledgeDocumentChunk).where(KnowledgeDocumentChunk.document_id == document.id))
+    db.delete(document)
+    add_audit_event(
+        db,
+        tenant_id=snapshot["tenant_id"],
+        actor_id=principal.user.id,
+        action="knowledge_document.deleted",
+        resource_type="knowledge_document",
+        resource_id=str(document_id),
+        payload={"title": snapshot["title"], "hard_delete": True, "secret_included": False},
+    )
+    db.commit()
+    return snapshot
 
 
 def list_knowledge_document_chunks(
@@ -7369,7 +7792,8 @@ def search_knowledge_documents(
 ) -> KnowledgeDocumentSearchResponse:
     _require_same_tenant(db, tenant_id, principal)
     settings = get_settings()
-    query_embedding = _embed_text(payload.query, settings=settings)
+    retrieval_query = _expand_query_for_retrieval(payload.query)
+    query_embedding = _embed_text(retrieval_query, settings=settings)
     _require_embedding_available(query_embedding)
     _require_vector_store_available(query_embedding.profile, db)
     retrieval_backend = _retrieval_backend_for_profile(query_embedding.profile, db)
@@ -7412,12 +7836,31 @@ def search_knowledge_documents(
             )
         row_query = row_query.where(KnowledgeDocumentChunk.id.in_(candidate_ids))
     rows = list(db.execute(row_query).all())
-    query_tokens = _tokenize(payload.query)
+    category = payload.category.strip()
+    if category:
+        rows = [
+            (chunk, document)
+            for chunk, document in rows
+            if _knowledge_category_from_tags(document.tags) == category
+        ]
+    query_tokens = _tokenize(retrieval_query)
     query_terms = set(query_tokens)
     meaningful_query_terms = _meaningful_terms(query_terms)
     query_terms_vector = _token_vector(query_tokens)
     query_vector = query_embedding.vector
-    chunk_tokens = {chunk.id: _tokenize(chunk.content) for chunk, _ in rows}
+    chunk_tokens = {
+        chunk.id: _tokenize(
+            " ".join(
+                [
+                    document.title,
+                    _knowledge_category_from_tags(document.tags),
+                    " ".join(document.tags),
+                    chunk.content,
+                ]
+            )
+        )
+        for chunk, document in rows
+    }
     document_frequencies: Counter[str] = Counter()
     for terms in chunk_tokens.values():
         document_frequencies.update(set(terms))
@@ -7442,10 +7885,16 @@ def search_knowledge_documents(
         if vector_score <= 0:
             vector_score = _cosine_from_vectors(query_terms_vector, vector_terms)
         matched_terms = _meaningful_terms(query_terms.intersection(set(terms)))
-        if len(meaningful_query_terms) > 1 and len(matched_terms) < 1:
+        exact_query = payload.query.strip()
+        phrase_hit = bool(exact_query and (exact_query in document.title or exact_query in chunk.content))
+        if len(meaningful_query_terms) > 1 and len(matched_terms) < 1 and not phrase_hit:
             continue
-        reranker_score = _rerank_score(payload.query, meaningful_query_terms, matched_terms, chunk.content)
-        score = (bm25_score * 0.72) + (vector_score * 2.35) + (reranker_score * 0.35)
+        reranker_score = _rerank_score(retrieval_query, meaningful_query_terms, matched_terms, chunk.content)
+        title_bonus = 0.65 if exact_query and exact_query in document.title else 0.0
+        if not title_bonus and matched_terms.intersection(set(_tokenize(document.title))):
+            title_bonus = 0.35
+        phrase_bonus = 0.45 if phrase_hit else 0.0
+        score = (bm25_score * 0.72) + (vector_score * 2.35) + (reranker_score * 0.35) + title_bonus + phrase_bonus
         if score <= payload.min_score:
             continue
         matched_terms = sorted(matched_terms, key=lambda term: (-len(term), term))[:20]
@@ -7470,6 +7919,59 @@ def search_knowledge_documents(
         )
 
     matches.sort(key=lambda match: (match.score, match.confidence, -match.chunk_index), reverse=True)
+    if query_embedding.profile.reranker == "siliconflow_reranker_v1":
+        matches = _siliconflow_rerank_matches(
+            query=payload.query,
+            matches=matches[: max(payload.top_k * 4, payload.top_k)],
+            settings=settings,
+        )
+    selected_matches = [
+        match
+        for match in matches
+        if match.confidence >= 0.38 or match.reranker_score >= 0.34 or len(match.matched_terms) >= 2
+    ][: payload.top_k]
+    final_answer = ""
+    final_answer_status = "knowledge_gap" if not selected_matches else "not_generated"
+    final_answer_source = ""
+    final_answer_citations: list[dict[str, Any]] = []
+    if selected_matches:
+        model_result = generate_reply_draft(
+            ModelDraftRequest(
+                user_message=payload.query,
+                intent="product_consulting",
+                knowledge=[
+                    ModelDraftKnowledge(
+                        title=match.section_title or match.document_title,
+                        answer=match.content_preview,
+                        source_uri=match.source_uri,
+                        matched_terms=match.matched_terms,
+                    )
+                    for match in selected_matches
+                ],
+                provider="auto",
+                confidence=max(match.confidence for match in selected_matches),
+                risk_level="low",
+            )
+        )
+        if model_result.status == "succeeded" and model_result.draft_text.strip():
+            final_answer = model_result.draft_text.strip()
+            final_answer_status = "generated"
+            final_answer_source = f"{model_result.provider}:{model_result.model}"
+        else:
+            top_match = selected_matches[0]
+            final_answer = top_match.content_preview.strip()
+            final_answer_status = "fallback_from_top_match"
+            final_answer_source = "top_knowledge_match"
+        final_answer_citations = [
+            {
+                "document_id": match.document_id,
+                "chunk_id": match.chunk_id,
+                "document_title": match.document_title,
+                "source_uri": match.source_uri,
+                "chunk_index": match.chunk_index,
+            }
+            for match in selected_matches
+        ]
     return KnowledgeDocumentSearchResponse(
         query=payload.query,
         retrieval_mode=DOCUMENT_RETRIEVAL_MODE,
@@ -7481,7 +7983,12 @@ def search_knowledge_documents(
         embedding_model=query_embedding.profile.model,
         reranker=query_embedding.profile.reranker,
         total_candidates=len(rows),
-        matches=matches[: payload.top_k],
+        matches=selected_matches,
+        final_answer=final_answer,
+        final_answer_status=final_answer_status,
+        final_answer_source=final_answer_source,
+        final_answer_citations=final_answer_citations,
+        knowledge_gap_required=not selected_matches,
     )
 
 

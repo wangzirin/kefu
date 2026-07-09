@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, ReactElement } from "react";
+import * as XLSX from "xlsx";
 
 import {
   applyStagedSignedUpdatePackage,
@@ -65,6 +66,7 @@ import {
   createSalesLeadFromConversation,
   createSupportTicketFromConversation,
   createDryRunSendAttempt,
+  deleteKnowledgeDocument,
   ensureNoopChannelConnector,
   exportCustomerQualityReport,
   downloadCustomerQualityReportArchive,
@@ -84,6 +86,7 @@ import {
   getWorkerHealthDashboard,
   getKnowledgeEvaluationRun,
   getAiServiceStatus,
+  getModelServiceConfig,
   getKnowledgeMemoryMeshOverview,
   getCustomerQualityReport,
   getMonthlyQualityReview,
@@ -138,6 +141,7 @@ import {
   preflightSignedUpdatePackage,
   publishKnowledgeDocument,
   publishKnowledgeImport,
+  probeModelService,
   previewKnowledgeUpdatePackage,
   precheckKnowledgeImport,
   precheckCustomerServiceQuestionBank,
@@ -148,6 +152,7 @@ import {
   runKnowledgeEvaluationSet,
   runKnowledgeImportSample,
   runTrustedInboundWorker,
+  clearModelServiceConfig,
   rollbackKnowledgeDocumentPublication,
   rollbackStagedSignedUpdatePackage,
   searchKnowledgeDocuments,
@@ -158,12 +163,14 @@ import {
   updateCurrentUserProfile,
   updateCurrentUserSettings,
   updateKnowledgeGap,
+  updateKnowledgeDocument,
   updateBusinessObject,
   updateSalesLead,
   updateSupportTicket,
   updateDiagnosticIntakeRecord,
   updateDiagnosticRemediationRequest,
   updateTenantReplyStrategy,
+  updateModelServiceConfig,
   upsertChannelConnectorSecrets,
   deleteChannelConnectorSecrets,
   deleteChannelAccountConnection,
@@ -176,6 +183,8 @@ import {
   type BusinessObject,
   type BusinessObjectType,
   type AiServiceStatus,
+  type ModelServiceConfig,
+  type ModelServiceProbe,
   type Channel,
   type ChannelAccount,
   type ChannelAccountPayload,
@@ -278,9 +287,7 @@ import {
 } from "./api/client";
 import {
   getDefaultNavigationHrefForRoles,
-  getNavigationGroupsForRoles,
-  getRoleTaskPathsForRoles,
-  type RoleTaskPath
+  getNavigationGroupsForRoles
 } from "./data/navigation";
 import {
   DataSourceBadge,
@@ -289,7 +296,6 @@ import {
   PanelStateNotice,
   PREVIEW_DATA_LABEL,
   REAL_DATA_LABEL,
-  WorkspaceRuntimeStateStrip,
   WorkspaceStateNotice,
   formatAccessDisabledReason
 } from "./components/common/WorkspaceState";
@@ -375,6 +381,9 @@ const workspacePageComponents: Partial<Record<WorkspaceSection, WorkspacePageCom
   contacts: lazy(() => import("./pages/workspace/ContactsPage")),
   leads: lazy(() => import("./pages/workspace/LeadsPage")),
   knowledge: lazy(() => import("./pages/workspace/KnowledgePage")),
+  "knowledge-recall": lazy(() => import("./pages/workspace/KnowledgeRecallPage")),
+  "knowledge-qa-test": lazy(() => import("./pages/workspace/KnowledgeQATestPage")),
+  "bot-model-service": lazy(() => import("./pages/workspace/BotModelServicePage")),
   gaps: lazy(() => import("./pages/workspace/GapsPage")),
   channels: lazy(() => import("./pages/workspace/ChannelsPage")),
   ops: lazy(() => import("./pages/workspace/OpsPage")),
@@ -756,6 +765,13 @@ interface KnowledgeMemoryMeshState {
   data: KnowledgeMemoryMeshOverview | null;
 }
 
+interface ModelServiceState {
+  status: "idle" | "loading" | "ready" | "error";
+  message: string;
+  config: ModelServiceConfig | null;
+  probe: ModelServiceProbe | null;
+}
+
 interface TenantReplyStrategyState {
   status: "idle" | "loading" | "ready" | "error";
   message: string;
@@ -796,6 +812,8 @@ interface ObjectKnowledgeCardDraft {
 }
 
 interface KnowledgeDocumentDraft {
+  editingId: number | null;
+  category: string;
   title: string;
   sourceUri: string;
   tags: string;
@@ -901,23 +919,6 @@ interface KnowledgeGapState {
   lastSync: KnowledgeGapSyncResult | null;
 }
 
-interface RoleTaskPathMetric {
-  value: string;
-  note: string;
-  tone: "urgent" | "warning" | "normal" | "success";
-}
-
-interface RoleTaskPathMetrics {
-  reviewItems: HumanReviewInboxItem[];
-  outboxDrafts: OutboxDraft[];
-  failureReviews: DeliveryFailureReview[];
-  deliveryJobs: OutboxDeliveryJob[];
-  supportTickets: SupportTicketState;
-  salesLeads: SalesLeadState;
-  knowledgeGaps: KnowledgeGapState;
-  businessOpsDashboard: BusinessOpsDashboardState;
-}
-
 type WorkspaceTaskSource = "overview" | "quality" | "knowledge";
 
 interface WorkspaceTaskContext {
@@ -944,6 +945,9 @@ type WorkspaceSection =
   | "contacts"
   | "leads"
   | "knowledge"
+  | "knowledge-recall"
+  | "knowledge-qa-test"
+  | "bot-model-service"
   | "gaps"
   | "channels"
   | "model"
@@ -1428,6 +1432,8 @@ export function App() {
     lastSync: null
   });
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeDocumentDraft>({
+    editingId: null,
+    category: "售前",
     title: "",
     sourceUri: "",
     tags: "",
@@ -1453,6 +1459,12 @@ export function App() {
     status: "idle",
     message: "等待正式登录",
     data: null
+  });
+  const [modelService, setModelService] = useState<ModelServiceState>({
+    status: "idle",
+    message: "等待正式登录",
+    config: null,
+    probe: null
   });
   const [channelConnectorSelfService, setChannelConnectorSelfService] = useState<ChannelConnectorSelfServiceState>({
     status: "idle",
@@ -1551,10 +1563,6 @@ export function App() {
   const navigationRoleKey = authRoles.join("|");
   const visibleNavigationGroups = useMemo(
     () => getNavigationGroupsForRoles(authRoles),
-    [navigationRoleKey]
-  );
-  const visibleTaskPaths = useMemo(
-    () => getRoleTaskPathsForRoles(authRoles),
     [navigationRoleKey]
   );
   const defaultWorkspaceSection = useMemo(
@@ -2050,6 +2058,7 @@ export function App() {
       await createAgentReply(item.id, auth.token, { content: trimmed });
       await refreshConversationDetail(item.id, auth.token);
       await refreshConversationInbox(auth.user.tenant.id, auth.token, conversationInboxView, conversationInboxFilters);
+      refreshLiveWorkspaceResources();
       setLocalReplyState({
         status: "sent",
         conversationId: item.id,
@@ -2349,7 +2358,7 @@ export function App() {
         data
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "无法读取知识网络总览";
+      const message = error instanceof Error ? error.message : "无法读取资料库状态";
       setKnowledgeMemoryMesh((current) => ({
         status: "error",
         message,
@@ -2452,6 +2461,95 @@ export function App() {
         message,
         data: null
       });
+    }
+  }
+
+  async function refreshModelService(tenantId: string, token: string) {
+    setModelService((current) => ({
+      ...current,
+      status: "loading",
+      message: ""
+    }));
+    try {
+      const config = await getModelServiceConfig(tenantId, token);
+      setModelService((current) => ({
+        ...current,
+        status: "ready",
+        message: config.provider.api_key_configured ? "模型服务已配置" : "请配置硅基流动 API Key",
+        config
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法读取模型服务配置";
+      setModelService({
+        status: "error",
+        message,
+        config: null,
+        probe: null
+      });
+    }
+  }
+
+  async function handleSaveModelServiceApiKey(apiKey: string) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    const cleanKey = apiKey.trim();
+    if (!cleanKey) {
+      setModelService((current) => ({ ...current, status: "error", message: "请输入硅基流动 API Key" }));
+      return;
+    }
+    setModelService((current) => ({ ...current, status: "loading", message: "正在保存模型服务配置" }));
+    try {
+      const config = await updateModelServiceConfig(auth.user.tenant.id, auth.token, { api_key: cleanKey });
+      setModelService((current) => ({
+        ...current,
+        status: "ready",
+        message: "模型服务配置已保存",
+        config
+      }));
+      await refreshAiServiceStatus(auth.user.tenant.id, auth.token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存模型服务配置失败";
+      setModelService((current) => ({ ...current, status: "error", message }));
+    }
+  }
+
+  async function handleClearModelServiceApiKey() {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    setModelService((current) => ({ ...current, status: "loading", message: "正在清除模型服务配置" }));
+    try {
+      const config = await clearModelServiceConfig(auth.user.tenant.id, auth.token);
+      setModelService({
+        status: "ready",
+        message: "模型服务 API Key 已清除",
+        config,
+        probe: null
+      });
+      await refreshAiServiceStatus(auth.user.tenant.id, auth.token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "清除模型服务配置失败";
+      setModelService((current) => ({ ...current, status: "error", message }));
+    }
+  }
+
+  async function handleProbeModelService() {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    setModelService((current) => ({ ...current, status: "loading", message: "正在测试模型服务" }));
+    try {
+      const probe = await probeModelService(auth.user.tenant.id, auth.token);
+      setModelService((current) => ({
+        ...current,
+        status: probe.status === "succeeded" ? "ready" : "error",
+        message: probe.status === "succeeded" ? "三类模型连通性测试通过" : "部分模型连通性测试失败",
+        probe
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "模型服务测试失败";
+      setModelService((current) => ({ ...current, status: "error", message }));
     }
   }
 
@@ -3055,6 +3153,12 @@ export function App() {
         message: NO_PERMISSION_MESSAGE,
         data: null
       });
+      setModelService({
+        status: "idle",
+        message: NO_PERMISSION_MESSAGE,
+        config: null,
+        probe: null
+      });
     }
     if (!canReadKnowledgeEvaluations(user)) {
       setKnowledgeEvaluation({
@@ -3165,6 +3269,7 @@ export function App() {
       void refreshKnowledgeDocuments(tenantId, token, hasKnowledgeManagePermission(user));
       void refreshKnowledgeMemoryMeshOverview(tenantId, token);
       void refreshTenantReplyStrategy(tenantId, token);
+      void refreshModelService(tenantId, token);
     }
     if (canReadKnowledgeEvaluations(user)) {
       void refreshKnowledgeEvaluations(tenantId, token, true);
@@ -3821,6 +3926,10 @@ export function App() {
         note: note?.trim() || conversationActionNote(action)
       });
       await refreshConversationInbox(auth.user.tenant.id, auth.token, conversationInboxView, conversationInboxFilters);
+      refreshLiveWorkspaceResources();
+      if (selectedLiveConversationId === item.id && action !== "close") {
+        await refreshConversationDetail(item.id, auth.token, { silent: true });
+      }
       if (action === "close") {
         hideConversationLocally(item.id);
       }
@@ -4323,6 +4432,94 @@ export function App() {
     }
   }
 
+  function normalizeKnowledgeQuestionHeader(value: unknown) {
+    return String(value ?? "")
+      .trim()
+      .replace(/\s+/g, "")
+      .toLowerCase();
+  }
+
+  function knowledgeQuestionColumnIndex(headers: unknown[], names: string[]) {
+    const normalizedNames = new Set(names.map((name) => normalizeKnowledgeQuestionHeader(name)));
+    return headers.findIndex((header) => normalizedNames.has(normalizeKnowledgeQuestionHeader(header)));
+  }
+
+  async function handleImportKnowledgeQuestionWorkbook(file: File) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    if (!/\.(xlsx|xls)$/i.test(file.name)) {
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        status: "error",
+        message: "请上传 .xls 或 .xlsx 文件。"
+      }));
+      return;
+    }
+    setKnowledgeTemplateImportDraft((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在读取 Excel 表格"
+    }));
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const firstSheetName = workbook.SheetNames[0];
+      if (!firstSheetName) {
+        throw new Error("Excel 文件没有可读取的工作表。");
+      }
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheetName], {
+        header: 1,
+        defval: ""
+      });
+      const header = rows[0] ?? [];
+      const categoryIndex = knowledgeQuestionColumnIndex(header, ["问题分类", "分类", "category"]);
+      const questionIndex = knowledgeQuestionColumnIndex(header, ["问题", "标准问题", "question"]);
+      const answerIndex = knowledgeQuestionColumnIndex(header, ["答案", "标准答案", "answer"]);
+      if (questionIndex < 0 || answerIndex < 0) {
+        throw new Error("模板缺少必填列：问题、答案。请先下载模板后填写。");
+      }
+      const importRows = rows
+        .slice(1)
+        .map((row, index) => ({
+          rowNumber: index + 2,
+          category: categoryIndex >= 0 ? String(row[categoryIndex] ?? "").trim() : "",
+          question: String(row[questionIndex] ?? "").trim(),
+          answer: String(row[answerIndex] ?? "").trim()
+        }))
+        .filter((row) => row.category || row.question || row.answer);
+      const invalidRows = importRows.filter((row) => !row.question || !row.answer);
+      if (importRows.length === 0) {
+        throw new Error("Excel 文件没有可导入的问题。");
+      }
+      if (invalidRows.length > 0) {
+        throw new Error(`第 ${invalidRows.map((row) => row.rowNumber).slice(0, 6).join("、")} 行缺少问题或答案。`);
+      }
+      for (const row of importRows) {
+        await createKnowledgeDocument(auth.user.tenant.id, auth.token, {
+          title: row.question,
+          raw_text: row.answer,
+          category: row.category || "未分类",
+          source_uri: `excel-import:${file.name}:row-${row.rowNumber}`,
+          tags: [],
+          status: "active"
+        });
+      }
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        status: "ready",
+        message: `已从 ${file.name} 导入 ${importRows.length} 条问题。`
+      }));
+      await refreshKnowledgeDocuments(auth.user.tenant.id, auth.token, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Excel 导入失败";
+      setKnowledgeTemplateImportDraft((current) => ({
+        ...current,
+        status: "error",
+        message
+      }));
+    }
+  }
+
   async function handleRunKnowledgeTemplateSample() {
     if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
       return;
@@ -4455,7 +4652,7 @@ export function App() {
       setKnowledgeWorkbench((current) => ({
         ...current,
         status: "error",
-        message: "标题和正文不能为空"
+        message: "问题和答案不能为空"
       }));
       return;
     }
@@ -4465,17 +4662,25 @@ export function App() {
       message: ""
     }));
     try {
-      await createKnowledgeDocument(auth.user.tenant.id, auth.token, {
+      const payload = {
         title,
         raw_text: rawText,
+        category: knowledgeDraft.category.trim() || "未分类",
         source_uri: knowledgeDraft.sourceUri.trim(),
         tags: knowledgeDraft.tags
           .split(/[,，\n]/)
           .map((tag) => tag.trim())
-          .filter(Boolean),
-        status: "active"
-      });
-      setKnowledgeDraft({ title: "", sourceUri: "", tags: "", rawText: "" });
+          .filter(Boolean)
+      };
+      if (knowledgeDraft.editingId) {
+        await updateKnowledgeDocument(knowledgeDraft.editingId, auth.token, payload);
+      } else {
+        await createKnowledgeDocument(auth.user.tenant.id, auth.token, {
+          ...payload,
+          status: "active"
+        });
+      }
+      setKnowledgeDraft({ editingId: null, category: "", title: "", sourceUri: "", tags: "", rawText: "" });
       await refreshKnowledgeDocuments(auth.user.tenant.id, auth.token, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "导入知识文档失败";
@@ -4487,7 +4692,18 @@ export function App() {
     }
   }
 
-  async function handleSearchKnowledgeDocuments() {
+  function handleKnowledgeSearchQueryChange(query: string) {
+    setKnowledgeSearchQuery(query);
+    if (!query.trim()) {
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        message: "",
+        searchResult: null
+      }));
+    }
+  }
+
+  async function handleSearchKnowledgeDocuments(category = "") {
     if (auth.status !== "ready" || !auth.token || !canReadKnowledgeDocuments(auth.user)) {
       return;
     }
@@ -4496,7 +4712,8 @@ export function App() {
       setKnowledgeWorkbench((current) => ({
         ...current,
         status: "error",
-        message: "请输入要检索的问题"
+        message: "请输入要检索的问题",
+        searchResult: null
       }));
       return;
     }
@@ -4508,7 +4725,8 @@ export function App() {
     try {
       const searchResult = await searchKnowledgeDocuments(auth.user.tenant.id, auth.token, {
         query,
-        top_k: 5
+        top_k: 5,
+        category: category.trim()
       });
       setKnowledgeWorkbench((current) => ({
         ...current,
@@ -4518,6 +4736,120 @@ export function App() {
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : "文档片段检索失败";
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "error",
+        message
+      }));
+    }
+  }
+
+  async function handleUpdateKnowledgeDocumentStatus(document: KnowledgeDocument, statusValue: "draft" | "active") {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    const actionLabel = statusValue === "active" ? "启用" : "停用";
+    setKnowledgeWorkbench((current) => ({
+      ...current,
+      status: "loading",
+      message: statusValue === "active" ? "正在启用资料" : "正在停用资料"
+    }));
+    try {
+      await updateKnowledgeDocument(document.id, auth.token, { status: statusValue });
+      await refreshKnowledgeDocuments(auth.user.tenant.id, auth.token, true);
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "ready",
+        message: `已${actionLabel}《${document.title}》`
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "更新资料状态失败";
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "error",
+        message
+      }));
+    }
+  }
+
+  async function handleDeleteKnowledgeDocument(document: KnowledgeDocument) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage)) {
+      return;
+    }
+    setKnowledgeWorkbench((current) => ({
+      ...current,
+      status: "loading",
+      message: "正在删除资料"
+    }));
+    try {
+      await deleteKnowledgeDocument(document.id, auth.token);
+      await refreshKnowledgeDocuments(auth.user.tenant.id, auth.token, true);
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "ready",
+        message: `已删除《${document.title}》`
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "删除资料失败";
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "error",
+        message
+      }));
+    }
+  }
+
+  async function handleBulkUpdateKnowledgeDocuments(documents: KnowledgeDocument[], statusValue: "draft" | "active") {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage) || documents.length === 0) {
+      return;
+    }
+    const actionLabel = statusValue === "active" ? "启用" : "停用";
+    const token = auth.token;
+    const tenantId = auth.user.tenant.id;
+    setKnowledgeWorkbench((current) => ({
+      ...current,
+      status: "loading",
+      message: `正在${actionLabel} ${documents.length} 条资料`
+    }));
+    try {
+      await Promise.all(documents.map((document) => updateKnowledgeDocument(document.id, token, { status: statusValue })));
+      await refreshKnowledgeDocuments(tenantId, token, true);
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "ready",
+        message: `已${actionLabel} ${documents.length} 条资料`
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "批量更新资料状态失败";
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "error",
+        message
+      }));
+    }
+  }
+
+  async function handleBulkDeleteKnowledgeDocuments(documents: KnowledgeDocument[]) {
+    if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.knowledgeManage) || documents.length === 0) {
+      return;
+    }
+    const token = auth.token;
+    const tenantId = auth.user.tenant.id;
+    setKnowledgeWorkbench((current) => ({
+      ...current,
+      status: "loading",
+      message: `正在删除 ${documents.length} 条资料`
+    }));
+    try {
+      await Promise.all(documents.map((document) => deleteKnowledgeDocument(document.id, token)));
+      await refreshKnowledgeDocuments(tenantId, token, true);
+      setKnowledgeWorkbench((current) => ({
+        ...current,
+        status: "ready",
+        message: `已删除 ${documents.length} 条资料`
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "批量删除资料失败";
       setKnowledgeWorkbench((current) => ({
         ...current,
         status: "error",
@@ -6324,16 +6656,6 @@ export function App() {
     reviewItems.find((item) => ["high", "critical"].includes(item.risk_level)) ??
     reviewItems[0] ??
     null;
-  const taskPathMetrics: RoleTaskPathMetrics = {
-    reviewItems,
-    outboxDrafts,
-    failureReviews: failureReviewItems,
-    deliveryJobs,
-    supportTickets,
-    salesLeads,
-    knowledgeGaps,
-    businessOpsDashboard
-  };
   const pageMeta = getWorkspacePageMeta(activeSection);
   const canManageConversation = canManageConversations(auth.user);
   const canManageTicket = canManageTickets(auth.user);
@@ -6395,6 +6717,9 @@ export function App() {
       ConversationInboxPanel,
       ConversationWorkbenchPanel,
       KnowledgeDocumentsPanel,
+      KnowledgeRecallPanel,
+      KnowledgeQATestPanel,
+      BotModelServicePanel,
       KnowledgeEvaluationPanel,
       KnowledgeGapPanel,
       KnowledgeWorkspacePage,
@@ -6473,6 +6798,8 @@ export function App() {
     handleBatchLabelSampledFactuality,
     handleCaptureEvaluationRunCaseFinalAnswerSample,
     handleCheckKnowledgeDocumentPublishGate,
+    handleBulkDeleteKnowledgeDocuments,
+    handleBulkUpdateKnowledgeDocuments,
     handleConfigureChannelAccount,
     handleDeleteChannelAccountConnection,
     handleConfigureChannelConnector,
@@ -6508,6 +6835,7 @@ export function App() {
     handleExportFinalAnswerLabels,
     handleExportKnowledgeEvaluationRunReport,
     handleExportDiagnosticBundle,
+    handleClearModelServiceApiKey,
     handleImportCustomerQuestionBank,
     handleImportKnowledgeConfirmation,
     handleImportKnowledgeDocument,
@@ -6515,7 +6843,9 @@ export function App() {
     handleImportFinalAnswerLabels,
     handlePrecheckKnowledgeTemplateImport,
     handleCreateKnowledgeTemplateImport,
+    handleImportKnowledgeQuestionWorkbook,
     handleRunKnowledgeTemplateSample,
+    handleKnowledgeSearchQueryChange,
     handlePublishKnowledgeTemplateImport,
     handleLabelEvaluationRunCaseFactuality,
     handleLoadCustomerMaterialTemplatePackage,
@@ -6531,15 +6861,18 @@ export function App() {
     handleResetAccountUserPassword,
     handleReviewApprove,
     handleReviewReject,
+    handleDeleteKnowledgeDocument,
     handleRollbackKnowledgeDocument,
     handleRollbackSignedUpdatePackage,
     handleRunDeliveryQueue,
     handleRunInboundWorker,
     handleRunKnowledgeEvaluation,
+    handleProbeModelService,
     handleRunWorker,
     handleSalesLeadFiltersChange,
     handleSalesLeadListViewChange,
     handleSaveBusinessObject,
+    handleSaveModelServiceApiKey,
     handleSaveTenantReplyStrategy,
     handleSearchKnowledgeDocuments,
     handleSelectContactProfile,
@@ -6556,6 +6889,7 @@ export function App() {
     handleUpdateDiagnosticIntakeRecord,
     handleUpdateDiagnosticRemediationRequest,
     handleUpdateKnowledgeGap,
+    handleUpdateKnowledgeDocumentStatus,
     handleUpdateSalesLeadStage,
     handleUpdateSupportTicketStatus,
     handleVerifyLocalBackup,
@@ -6577,6 +6911,7 @@ export function App() {
     liveColleagueSummaries,
     llmOpsReadiness,
     aiServiceStatus,
+    modelService,
     channelConnectorSelfService,
     localBackupState,
     localMaintenanceReadiness,
@@ -6609,6 +6944,7 @@ export function App() {
     refreshKnowledgeMemoryMeshOverview,
     refreshLiveWorkspaceResources,
     refreshLlmOpsReadiness,
+    refreshModelService,
     refreshLocalBackups,
     refreshLocalMaintenanceReadiness,
     refreshOpsAlertRules,
@@ -6685,13 +7021,22 @@ export function App() {
   const liveCurrentUserId = Number.isFinite(parsedCurrentUserId) ? parsedCurrentUserId : null;
   const isLiveConversationActive = (item: ConversationInboxItem) => !["closed", "resolved"].includes(item.status);
   const isLiveQueuedConversation = (item: ConversationInboxItem) =>
-    isLiveConversationActive(item) && item.assigned_user_id === null;
+    isLiveConversationActive(item) &&
+    item.status === "queued_for_me" &&
+    liveCurrentUserId !== null &&
+    item.assigned_user_id === liveCurrentUserId;
   const isLiveMineConversation = (item: ConversationInboxItem) =>
-    isLiveConversationActive(item) && liveCurrentUserId !== null && item.assigned_user_id === liveCurrentUserId;
+    isLiveConversationActive(item) &&
+    liveCurrentUserId !== null &&
+    item.assigned_user_id === liveCurrentUserId &&
+    ["assigned_to_me", "handoff"].includes(item.status);
   const isLiveVisitingConversation = (item: ConversationInboxItem) =>
-    isLiveConversationActive(item) && !isLiveQueuedConversation(item) && !isLiveMineConversation(item);
+    isLiveConversationActive(item) && ["bot_visiting", "bot", "bot_assisting"].includes(item.status);
   const livePreviewConversation =
     liveConversations.find((item) => item.id === selectedLiveConversationId) ??
+    liveConversations.find(isLiveQueuedConversation) ??
+    liveConversations.find(isLiveMineConversation) ??
+    liveConversations.find(isLiveVisitingConversation) ??
     liveConversations.find((item) => liveCurrentUserId !== null && item.assigned_user_id === liveCurrentUserId) ??
     liveConversations[0] ??
     null;
@@ -7162,7 +7507,7 @@ export function App() {
                       className="dialogue-section-title"
                       aria-expanded={!collapsedDialogueSections.queued}
                       onClick={() => toggleDialogueSection("queued")}
-                      title="尚未分配给任何坐席、等待领取或分配的会话"
+                      title="已派发给我，但我还没接起或回复的会话"
                     >
                       <ChevronDown className={collapsedDialogueSections.queued ? "collapsed" : ""} size={13} />
                       <span>排队中</span>
@@ -7197,7 +7542,7 @@ export function App() {
                       className="dialogue-section-title"
                       aria-expanded={!collapsedDialogueSections.mine}
                       onClick={() => toggleDialogueSection("mine")}
-                      title="已经分配给当前坐席、需要你继续处理的会话"
+                      title="我已经手动接起，正在与客户对话"
                     >
                       <ChevronDown className={collapsedDialogueSections.mine ? "collapsed" : ""} size={13} />
                       <span>{liveMineConversations.length > 0 ? `我的对话 (${liveMineConversations.length})` : "我的对话"}</span>
@@ -7231,7 +7576,7 @@ export function App() {
                       className="dialogue-section-title"
                       aria-expanded={!collapsedDialogueSections.visiting}
                       onClick={() => toggleDialogueSection("visiting")}
-                      title="仍在线浏览或活跃但未必已经进入人工接待的访客"
+                      title="客户正在与智能客服对话"
                     >
                       <ChevronDown className={collapsedDialogueSections.visiting ? "collapsed" : ""} size={13} />
                       <span>访问中</span>
@@ -7325,23 +7670,6 @@ export function App() {
               </button>
             </div>
           </header>
-        ) : null}
-
-        {activeSection !== "overview" && activeSection !== "live" && activeSection !== "channels" ? (
-          <RoleTaskPathStrip
-            paths={visibleTaskPaths}
-            activeSection={activeSection}
-            roleLabel={getWorkspaceRoleLabel(auth.user.roles)}
-            metrics={taskPathMetrics}
-          />
-        ) : null}
-
-        {activeSection !== "overview" && activeSection !== "live" && activeSection !== "channels" ? (
-          <WorkspaceRuntimeStateStrip
-            mode={auth.mode}
-            connectionStatus={connection.status}
-            compact={false}
-          />
         ) : null}
 
         <section className={`workspace-page workspace-page-${activeSection}${activeSection === "overview" ? " workspace-page-overview" : ""}`} aria-label={pageMeta.title}>
@@ -7683,139 +8011,9 @@ export function App() {
   );
 }
 
-function RoleTaskPathStrip({
-  paths,
-  activeSection,
-  roleLabel,
-  metrics
-}: {
-  paths: RoleTaskPath[];
-  activeSection: WorkspaceSection;
-  roleLabel: string;
-  metrics: RoleTaskPathMetrics;
-}) {
-  if (paths.length === 0) {
-    return null;
-  }
-
-  return (
-    <section className="role-task-paths" aria-label={`${roleLabel}任务路径`}>
-      <div className="role-task-paths-heading">
-        <span>今日任务路径</span>
-        <strong>{roleLabel}</strong>
-      </div>
-      <div className="role-task-path-grid">
-        {paths.map((path, index) => {
-          const section = getWorkspaceSectionFromHash(path.href);
-          const metric = getRoleTaskPathMetric(path.id, metrics);
-          return (
-            <a
-              key={path.id}
-              className={`role-task-path is-${metric.tone}${section === activeSection ? " is-active" : ""}`}
-              data-role-task-id={path.id}
-              href={path.href}
-              aria-current={section === activeSection ? "page" : undefined}
-            >
-              <span className="role-task-index">{String(index + 1).padStart(2, "0")}</span>
-              <span className="role-task-copy">
-                <strong>{path.label}</strong>
-                <small>{path.intent}</small>
-              </span>
-              <span className="role-task-metric" aria-label={`${path.label}当前状态`}>
-                <strong>{metric.value}</strong>
-                <small>{metric.note}</small>
-              </span>
-            </a>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function getRoleTaskPathMetric(id: string, metrics: RoleTaskPathMetrics): RoleTaskPathMetric {
-  const highRiskReviews = metrics.reviewItems.filter((item) => ["high", "critical"].includes(item.risk_level)).length;
-  const openReviews = metrics.reviewItems.length;
-  const pendingDrafts = metrics.outboxDrafts.filter((draft) => draft.status === "pending_confirmation").length;
-  const readyDrafts = metrics.outboxDrafts.filter((draft) => draft.status === "ready_to_send").length;
-  const channelExceptions =
-    metrics.failureReviews.length +
-    metrics.deliveryJobs.filter((job) => ["blocked", "dead_letter", "dead_lettered", "failed"].includes(job.status)).length;
-  const openTickets = "data" in metrics.supportTickets ? metrics.supportTickets.data.total : 0;
-  const openLeads = "data" in metrics.salesLeads ? metrics.salesLeads.data.total : 0;
-  const openKnowledgeGaps = "data" in metrics.knowledgeGaps ? metrics.knowledgeGaps.data.total : 0;
-  const dashboardHealth = metrics.businessOpsDashboard.data?.summary.health_score ?? null;
-  const inboundConversations = metrics.businessOpsDashboard.data?.summary.inbound_conversations ?? openReviews + pendingDrafts + readyDrafts;
-
-  switch (id) {
-    case "ops-risk-scan":
-      return {
-        value: dashboardHealth === null ? `${inboundConversations}` : `${dashboardHealth}`,
-        note: dashboardHealth === null ? "今日信号" : "健康分",
-        tone: dashboardHealth === null || dashboardHealth >= 82 ? "success" : dashboardHealth >= 68 ? "warning" : "urgent"
-      };
-    case "review-risk-drafts":
-      return {
-        value: `${highRiskReviews}/${openReviews}`,
-        note: "高风险/待审",
-        tone: highRiskReviews > 0 ? "urgent" : openReviews > 0 ? "warning" : "success"
-      };
-    case "outbox-gate":
-      return {
-        value: `${pendingDrafts + readyDrafts}`,
-        note: "待发门禁",
-        tone: pendingDrafts + readyDrafts > 0 ? "warning" : "success"
-      };
-    case "live-inbox":
-      return {
-        value: `${inboundConversations}`,
-        note: "会话信号",
-        tone: openReviews > 0 ? "warning" : "success"
-      };
-    case "customer-followup":
-      return {
-        value: `${openLeads}`,
-        note: "线索",
-        tone: openLeads > 0 ? "normal" : "success"
-      };
-    case "ticket-sla":
-      return {
-        value: `${openTickets}`,
-        note: "工单",
-        tone: openTickets > 0 ? "warning" : "success"
-      };
-    case "quality-cause-review":
-      return {
-        value: `${highRiskReviews + channelExceptions + openKnowledgeGaps}`,
-        note: "错因信号",
-        tone: highRiskReviews + channelExceptions + openKnowledgeGaps > 0 ? "warning" : "success"
-      };
-    case "knowledge-gap-repair":
-      return {
-        value: `${openKnowledgeGaps}`,
-        note: "知识缺口",
-        tone: openKnowledgeGaps > 0 ? "warning" : "success"
-      };
-    case "channel-connector-status":
-      return {
-        value: `${channelExceptions}`,
-        note: "渠道异常",
-        tone: channelExceptions > 0 ? "urgent" : "success"
-      };
-    case "ops-health-check":
-      return {
-        value: metrics.businessOpsDashboard.status === "loading" ? "刷新中" : "只读",
-        note: "运维状态",
-        tone: metrics.businessOpsDashboard.status === "error" ? "warning" : "normal"
-      };
-    default:
-      return { value: "查看", note: "下一步", tone: "normal" };
-  }
-}
-
 function getInitialWorkspaceSection(): WorkspaceSection {
   if (typeof window === "undefined") {
-    return "overview";
+    return "live";
   }
   return getWorkspaceSectionFromHash(window.location.hash);
 }
@@ -7882,6 +8080,12 @@ function getWorkspaceSectionFromHash(hash: string): WorkspaceSection {
     contacts: "contacts",
     leads: "leads",
     knowledge: "knowledge",
+    "knowledge-recall": "knowledge-recall",
+    "knowledge-qa-test": "knowledge-qa-test",
+    "bot-model-service": "bot-model-service",
+    "model-service": "bot-model-service",
+    recall: "knowledge-recall",
+    "qa-test": "knowledge-qa-test",
     gaps: "gaps",
     "knowledge-gaps": "gaps",
     channels: "channels",
@@ -7897,7 +8101,7 @@ function getWorkspaceSectionFromHash(hash: string): WorkspaceSection {
     pilot: "pilot",
     settings: "settings"
   };
-  return aliases[value] ?? "overview";
+  return aliases[value] ?? "live";
 }
 
 function getChannelEntryIdFromHash(hash: string) {
@@ -8017,14 +8221,14 @@ function parseWorkspaceTaskContext(hash: string): WorkspaceTaskContext | null {
     source,
     targetSection,
     task: params.get("task") ?? "overview-task",
-    title: params.get("title") ?? (source === "quality" ? "处理质量复盘任务" : "处理运营总览任务"),
+    title: params.get("title") ?? (source === "quality" ? "处理质量复盘任务" : "处理工作台任务"),
     description: params.get("description") ?? formatWorkspaceTaskSourceFallbackDescription(source),
     range: params.get("range") ?? "today",
     channelId: Number.isFinite(channelId) ? channelId : null,
     channelLabel: params.get("channel_label") ?? (channelId ? `渠道 #${channelId}` : "全部渠道"),
     status: params.get("status") || undefined,
     queue: params.get("queue") || undefined,
-    emptyText: params.get("empty") ?? "本时间窗口暂无对应任务。"
+    emptyText: params.get("empty") ?? "当前没有对应内容。"
   };
 }
 
@@ -8062,9 +8266,9 @@ function formatWorkspaceTaskSourceFallbackDescription(source: WorkspaceTaskSourc
     return "该入口来自质量复盘，目标页已按错因和修复上下文收口。";
   }
   if (source === "knowledge") {
-    return "该入口来自知识运营流程，目标页已按补知识、回归和发布门禁上下文收口。";
+    return "该入口来自资料库流程，目标页已按补资料上下文收口。";
   }
-  return "该入口来自运营总览，目标页已按当前处理上下文收口。";
+  return "该入口来自工作台，目标页已按当前处理上下文收口。";
 }
 
 function formatOpsRangeLabel(value: string) {
@@ -8240,10 +8444,10 @@ function isWorkspaceSectionVisible(section: WorkspaceSection, groups: ReturnType
 
 function getWorkspaceRoleLabel(roles: string[]) {
   if (hasWorkspaceRole(roles, ["owner"])) {
-    return "管理员视图";
+    return "工作台";
   }
   if (hasWorkspaceRole(roles, ["admin"])) {
-    return "运营管理视图";
+    return "工作台";
   }
   if (hasWorkspaceRole(roles, ["agent"])) {
     return "坐席视图";
@@ -8314,9 +8518,24 @@ function getWorkspacePageMeta(section: WorkspaceSection) {
       description: "把报价、试点、部署和采购类咨询沉淀为线索，跟踪负责人、阶段和转化结果。"
     },
     knowledge: {
-      title: "知识库运营",
-      kicker: "文档与引用",
-      description: "导入文档、查看分块、检索证据，并为回复提供可追溯引用。"
+      title: "资料库",
+      kicker: "机器人资料",
+      description: "导入和维护机器人可引用的标准问答。"
+    },
+    "knowledge-recall": {
+      title: "测试召回",
+      kicker: "机器人召回",
+      description: "输入客户问题，检查机器人能否命中正确知识。"
+    },
+    "knowledge-qa-test": {
+      title: "问答测试",
+      kicker: "机器人问答",
+      description: "输入客户问题，查看机器人基于命中知识生成的最终回答。"
+    },
+    "bot-model-service": {
+      title: "模型服务",
+      kicker: "机器人模型",
+      description: "配置机器人使用的嵌入模型、重排序模型和智能问答模型。"
     },
     gaps: {
       title: "知识缺口闭环",
@@ -8757,10 +8976,10 @@ function ConversationInboxPanel({
         filteredTotal={result.total}
         statusOptions={[
           { label: "全部状态", value: "all" },
-          { label: "机器人接待", value: "bot" },
-          { label: "人工接管", value: "handoff" },
-          { label: "等待人工", value: "waiting_human" },
-          { label: "进行中", value: "open" }
+          { label: "访问中", value: "bot_visiting" },
+          { label: "排队中", value: "queued_for_me" },
+          { label: "我的对话", value: "assigned_to_me" },
+          { label: "已关闭", value: "closed" }
         ]}
         searchPlaceholder="搜索客户、会话主题、最后消息、下一步动作"
         onChange={onListViewChange}
@@ -8858,11 +9077,11 @@ function ConversationInboxPanel({
                 <button
                   type="button"
                   className="primary-action"
-                  onClick={() => onWorkflowAction(item, item.status === "resolved" ? "reopen" : "claim")}
+                  onClick={() => onWorkflowAction(item, item.status === "resolved" || item.status === "closed" ? "reopen" : "claim")}
                   disabled={!canManageConversations || !canClaimConversation(item, currentUserId, hasToken, isLoading)}
                 >
                   <MessageSquare size={17} />
-                  {item.status === "resolved" ? "重开" : "领取"}
+                  {item.status === "resolved" || item.status === "closed" ? "重开" : "接起"}
                 </button>
                 <button
                   type="button"
@@ -9781,7 +10000,7 @@ function CopilotSandboxPanel({
             </div>
             <div>
               <dt>发送</dt>
-              <dd>真实外发关闭，渠道计划只保留本地记录</dd>
+              <dd>外部发送受控，渠道计划只保留本地记录</dd>
             </div>
             <div>
               <dt>队列</dt>
@@ -9895,7 +10114,7 @@ function WorkbenchCommandCenter({
           <h2>运营态势</h2>
         </div>
         <div className="command-status">
-          <span>真实外发关闭</span>
+          <span>外部发送受控</span>
           <strong>{deliveryJobs.length} 个队列任务</strong>
         </div>
       </div>
@@ -10950,7 +11169,6 @@ function KnowledgeDocumentsPanel({
   canImport,
   onBusinessObjectDraftChange,
   onUpdatePackageDraftChange,
-  onTemplateImportDraftChange,
   onReplyStrategyDraftChange,
   onObjectKnowledgeCardDraftChange,
   onDraftChange,
@@ -10959,8 +11177,7 @@ function KnowledgeDocumentsPanel({
   onCreateBusinessObject,
   onPreviewUpdatePackage,
   onImportUpdatePackage,
-  onPrecheckTemplateImport,
-  onCreateTemplateImport,
+  onImportQuestionWorkbook,
   onRunTemplateSample,
   onPublishTemplateImport,
   onSaveReplyStrategy,
@@ -10970,6 +11187,10 @@ function KnowledgeDocumentsPanel({
   onCheckPublishDocument,
   onPublishDocument,
   onRollbackDocument,
+  onUpdateDocumentStatus,
+  onBulkUpdateDocuments,
+  onDeleteDocument,
+  onBulkDeleteDocuments,
   onRefresh
 }: {
   state: KnowledgeWorkbenchState;
@@ -10990,7 +11211,6 @@ function KnowledgeDocumentsPanel({
   canImport: boolean;
   onBusinessObjectDraftChange: (draft: BusinessObjectDraft) => void;
   onUpdatePackageDraftChange: (draft: KnowledgeUpdatePackageDraft) => void;
-  onTemplateImportDraftChange: (draft: KnowledgeTemplateImportDraft) => void;
   onReplyStrategyDraftChange: (draft: ReplyStrategyDraft) => void;
   onObjectKnowledgeCardDraftChange: (draft: ObjectKnowledgeCardDraft) => void;
   onDraftChange: (draft: KnowledgeDocumentDraft) => void;
@@ -10999,21 +11219,37 @@ function KnowledgeDocumentsPanel({
   onCreateBusinessObject: () => void;
   onPreviewUpdatePackage: () => void;
   onImportUpdatePackage: () => void;
-  onPrecheckTemplateImport: () => void;
-  onCreateTemplateImport: () => void;
+  onImportQuestionWorkbook: (file: File) => void;
   onRunTemplateSample: () => void;
   onPublishTemplateImport: () => void;
   onSaveReplyStrategy: () => void;
   onCreateObjectKnowledgeCard: () => void;
   onImportDocument: () => void;
-  onSearchDocuments: () => void;
+  onSearchDocuments: (category?: string) => void;
   onCheckPublishDocument: (document: KnowledgeDocument) => void;
   onPublishDocument: (document: KnowledgeDocument) => void;
   onRollbackDocument: (document: KnowledgeDocument) => void;
+  onUpdateDocumentStatus: (document: KnowledgeDocument, status: "draft" | "active") => void;
+  onBulkUpdateDocuments: (documents: KnowledgeDocument[], status: "draft" | "active") => void;
+  onDeleteDocument: (document: KnowledgeDocument) => void;
+  onBulkDeleteDocuments: (documents: KnowledgeDocument[]) => void;
   onRefresh: () => void;
 }) {
   const isLoading = state.status === "loading";
   const searchResult = state.searchResult;
+  const [knowledgeEditorMode, setKnowledgeEditorMode] = useState<"single" | "batch" | null>(null);
+  const [activeKnowledgeCategory, setActiveKnowledgeCategory] = useState("all");
+  const [customKnowledgeCategories, setCustomKnowledgeCategories] = useState<string[]>([]);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
+  const [operationToast, setOperationToast] = useState("");
+  const lastToastMessageRef = useRef(state.message);
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
+  const knowledgeWorkbookInputRef = useRef<HTMLInputElement | null>(null);
   const [customerKnowledgeIntakeText, setCustomerKnowledgeIntakeText] = useState(DEFAULT_CUSTOMER_KNOWLEDGE_INTAKE_CSV);
   const importDisabledReason = formatAccessDisabledReason({
     hasToken,
@@ -11067,6 +11303,22 @@ function KnowledgeDocumentsPanel({
     () => Object.values(state.objectCardsByObject).reduce((total, cards) => total + cards.length, 0),
     [state.objectCardsByObject]
   );
+  const documentCategory = (document: KnowledgeDocument) =>
+    document.category ||
+    document.tags
+      .find((tag) => tag.startsWith("分类:"))
+      ?.replace(/^分类:/, "")
+      .trim() ||
+    "未分类";
+  const visibleDocuments = useMemo(
+    () =>
+      state.documents.filter((document) => {
+        if (document.status === "archived") return false;
+        if (activeKnowledgeCategory === "all") return true;
+        return documentCategory(document) === activeKnowledgeCategory;
+      }),
+    [activeKnowledgeCategory, state.documents]
+  );
   const policyDocuments = useMemo(
     () =>
       state.documents.filter((document) => {
@@ -11089,10 +11341,11 @@ function KnowledgeDocumentsPanel({
     (persistedReplyPolicy?.manual_review_terms.length ?? 0);
   const pagedDocuments = useMemo(
     () =>
-      getPagedItems(state.documents, listView, {
-        statusMatcher: (document, status) => document.status === status || document.ingestion_status === status,
+      getPagedItems(visibleDocuments, listView, {
+        statusMatcher: (document, status) => document.status === status,
         searchText: (document) => [
           document.title,
+          documentCategory(document),
           document.source_uri,
           document.source_type,
           document.status,
@@ -11100,8 +11353,29 @@ function KnowledgeDocumentsPanel({
           document.tags.join(" ")
         ]
       }),
-    [state.documents, listView]
+    [visibleDocuments, listView]
   );
+  const selectedDocuments = visibleDocuments.filter((document) => selectedDocumentIds.includes(document.id));
+  const selectedDocumentsOnPage = pagedDocuments.items.filter((document) => selectedDocumentIds.includes(document.id));
+  const allPageDocumentsSelected =
+    pagedDocuments.items.length > 0 && selectedDocumentsOnPage.length === pagedDocuments.items.length;
+  const somePageDocumentsSelected = selectedDocumentsOnPage.length > 0 && !allPageDocumentsSelected;
+  useEffect(() => {
+    const visibleIds = new Set(visibleDocuments.map((document) => document.id));
+    setSelectedDocumentIds((current) => current.filter((id) => visibleIds.has(id)));
+  }, [visibleDocuments]);
+  useEffect(() => {
+    if (state.message === lastToastMessageRef.current) {
+      return;
+    }
+    lastToastMessageRef.current = state.message;
+    if (state.status !== "ready" || !state.message || !state.message.startsWith("已")) {
+      return;
+    }
+    setOperationToast(state.message);
+    const timer = window.setTimeout(() => setOperationToast(""), 2800);
+    return () => window.clearTimeout(timer);
+  }, [state.status, state.message]);
   const publicationRecords = useMemo(
     () => Object.values(state.publicationsByDocument).flat(),
     [state.publicationsByDocument]
@@ -11131,10 +11405,6 @@ function KnowledgeDocumentsPanel({
   const customerKnowledgeIntakePackage = useMemo(
     () => buildCustomerKnowledgeUpdatePackageFromCsv(customerKnowledgeIntakeText),
     [customerKnowledgeIntakeText]
-  );
-  const templateImportRows = useMemo(
-    () => parseKnowledgeTemplateImportRows(templateImportDraft.text),
-    [templateImportDraft.text]
   );
   const customerKnowledgeIntakeCounts = {
     businessObjects: customerKnowledgeIntakePackage.business_objects.length,
@@ -11202,1157 +11472,846 @@ function KnowledgeDocumentsPanel({
       tone: latestCustomerSignoff ? "ready" : "waiting"
     }
   ];
-
-  function applyCustomerKnowledgeIntakePackage() {
-    const hasAnyItem = Object.values(customerKnowledgeIntakeCounts).some((count) => count > 0);
-    if (!hasAnyItem) {
-      onUpdatePackageDraftChange({
-        ...updatePackageDraft,
-        result: null,
-        status: "error",
-        message: "客户资料模板没有可转换的业务对象、问答、文档或回归题，请先补充内容。"
-      });
+  const knowledgeCategories = [
+    { label: "全部资料", category: "all", count: state.documents.filter((document) => document.status !== "archived").length },
+    ...Array.from(
+      state.documents
+        .filter((document) => document.status !== "archived")
+        .reduce((map, document) => {
+          const category = documentCategory(document);
+          map.set(category, (map.get(category) ?? 0) + 1);
+          return map;
+        }, new Map<string, number>())
+    )
+      .concat(customKnowledgeCategories.filter((category) => !state.documents.some((document) => document.status !== "archived" && documentCategory(document) === category)).map((category) => [category, 0] as [string, number]))
+      .sort(([first], [second]) => first.localeCompare(second, "zh-Hans-CN"))
+      .map(([label, count]) => ({ label, category: label, count }))
+  ];
+  const openSingleEditor = () => {
+    if (activeKnowledgeCategory !== "all") {
+      onDraftChange({ ...draft, editingId: null, category: activeKnowledgeCategory });
+    } else {
+      onDraftChange({ ...draft, editingId: null, category: "" });
+    }
+    setKnowledgeEditorMode((current) => (current === "single" ? null : "single"));
+  };
+  const addKnowledgeCategory = () => {
+    const category = window.prompt("请输入问题分类名称，例如：售前、售后、价格、退换货", activeKnowledgeCategory === "all" ? "" : activeKnowledgeCategory)?.trim();
+    if (!category) return;
+    setCustomKnowledgeCategories((current) => (current.includes(category) ? current : [...current, category]));
+    setActiveKnowledgeCategory(category);
+    onDraftChange({ ...draft, editingId: null, category });
+  };
+  const editKnowledgeDocument = (document: KnowledgeDocument) => {
+    onDraftChange({
+      editingId: document.id,
+      category: documentCategory(document),
+      title: document.title,
+      sourceUri: document.source_uri,
+      tags: document.tags.filter((tag) => !tag.startsWith("分类:")).join("，"),
+      rawText: document.raw_text || ""
+    });
+    setKnowledgeEditorMode("single");
+  };
+  const toggleDocumentSelection = (documentId: number, selected: boolean) => {
+    setSelectedDocumentIds((current) => {
+      if (selected) {
+        return current.includes(documentId) ? current : [...current, documentId];
+      }
+      return current.filter((id) => id !== documentId);
+    });
+  };
+  const togglePageSelection = (selected: boolean) => {
+    const pageIds = pagedDocuments.items.map((document) => document.id);
+    setSelectedDocumentIds((current) => {
+      if (selected) {
+        return Array.from(new Set([...current, ...pageIds]));
+      }
+      return current.filter((id) => !pageIds.includes(id));
+    });
+  };
+  const requestDocumentStatusUpdate = (document: KnowledgeDocument, statusValue: "draft" | "active") => {
+    const actionLabel = statusValue === "active" ? "启用" : "停用";
+    setConfirmAction({
+      title: "提示",
+      message: `确定${actionLabel}该问题吗？`,
+      confirmLabel: "确定",
+      onConfirm: () => onUpdateDocumentStatus(document, statusValue)
+    });
+  };
+  const requestDocumentDelete = (document: KnowledgeDocument) => {
+    setConfirmAction({
+      title: "提示",
+      message: "确定删除该问题吗？",
+      confirmLabel: "确定",
+      onConfirm: () => onDeleteDocument(document)
+    });
+  };
+  const runBulkStatusUpdate = (statusValue: "draft" | "active") => {
+    if (selectedDocuments.length === 0) return;
+    const actionLabel = statusValue === "active" ? "启用" : "停用";
+    setConfirmAction({
+      title: "提示",
+      message: `确定批量${actionLabel}吗？`,
+      confirmLabel: "确定",
+      onConfirm: () => {
+        onBulkUpdateDocuments(selectedDocuments, statusValue);
+        setSelectedDocumentIds([]);
+      }
+    });
+  };
+  const runBulkDelete = () => {
+    if (selectedDocuments.length === 0) return;
+    setConfirmAction({
+      title: "提示",
+      message: "确定批量删除吗？",
+      confirmLabel: "确定",
+      onConfirm: () => {
+        onBulkDeleteDocuments(selectedDocuments);
+        setSelectedDocumentIds([]);
+      }
+    });
+  };
+  const openBatchEditor = () => setKnowledgeEditorMode((current) => (current === "batch" ? null : "batch"));
+  const downloadQuestionImportTemplate = () => {
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      ["问题分类", "问题", "答案"],
+      ["售前", "标准版价格是多少？", "标准版每月 299 元，包含网站在线咨询和智能客服接待。"],
+      ["售后", "超过七天还能退货吗？", "超过七天需要先核对订单时间、商品状态、质量问题和平台售后规则。"],
+      ["", "没有分类的问题示例", "不填写问题分类时，系统会导入到未分类。"]
+    ]);
+    worksheet["!cols"] = [{ wch: 18 }, { wch: 36 }, { wch: 72 }];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "标准问答");
+    XLSX.writeFile(workbook, "AI客服知识库导入模板.xlsx", { compression: true });
+  };
+  const exportKnowledgeDocuments = () => {
+    const exportDocuments = visibleDocuments.filter((document) => document.status !== "archived");
+    if (exportDocuments.length === 0) {
+      window.alert("当前没有可导出的资料。");
       return;
     }
-    onUpdatePackageDraftChange({
-      ...updatePackageDraft,
-      text: JSON.stringify(customerKnowledgeIntakePackage, null, 2),
-      result: null,
-      status: "ready",
-      message: "已生成知识资料包，请继续点击“检查资料包”确认新增、跳过和错误项。"
+    const rows = exportDocuments.map((document) => ({
+      问题分类: documentCategory(document),
+      问题: document.title,
+      答案: document.raw_text || "",
+      当前状态: document.status === "active" ? "已启用" : document.status === "draft" ? "已停用" : document.status,
+      创建时间: document.created_at ? formatDateTime(document.created_at) : ""
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(rows, {
+      header: ["问题分类", "问题", "答案", "当前状态", "创建时间"]
     });
-  }
-
+    worksheet["!cols"] = [{ wch: 18 }, { wch: 36 }, { wch: 72 }, { wch: 12 }, { wch: 22 }];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "知识库资料");
+    const scope = activeKnowledgeCategory === "all" ? "全部问题" : activeKnowledgeCategory;
+    XLSX.writeFile(workbook, `AI客服知识库资料-${scope}.xlsx`, { compression: true });
+  };
   return (
-    <section className="panel knowledge-panel" id="workspace-knowledge" aria-label="知识库运营" data-knowledge-primary="library">
-      <div className="panel-heading">
-        <div>
-          <h2>知识库运营</h2>
-          <p>维护业务对象、标准问答、文档草稿和引用来源，让客服回复能从可追溯知识里生成。</p>
-        </div>
-        <div className="panel-actions">
-          <button type="button" className="ghost-action" onClick={onRefresh} disabled={!hasToken || isLoading}>
-            <RefreshCw size={17} />
-            {isLoading ? "刷新中" : "刷新"}
-          </button>
-        </div>
-      </div>
+    <section className="knowledge-console" id="workspace-knowledge" aria-label="机器人知识库" data-knowledge-primary="library">
+      <header className="knowledge-console-topbar">
+        <strong>资料库</strong>
+        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading}>
+          <RefreshCw size={15} />
+          {isLoading ? "刷新中" : "刷新"}
+        </button>
+      </header>
 
-      <div className="panel-state-row" aria-label="知识文档数据状态">
-        <DataSourceBadge
-          mode={hasToken ? "real" : "demo"}
-          label={hasToken ? REAL_DATA_LABEL : PREVIEW_DATA_LABEL}
-          detail={hasToken ? "读取租户知识文档与发布记录" : "登录后读取租户知识数据"}
-        />
-        <DataSourceBadge
-          mode="local"
-          label="本地检索口径"
-          detail="当前为确定性本地检索占位，生产向量库仍需专项验收"
-        />
-      </div>
-
-      <PanelStateNotice status={state.status} message={state.message} loadingMessage="正在读取知识文档、片段和发布记录。" />
-
-      <section className="customer-knowledge-intake-card" data-ai-workbench-template-import="true">
-        <div className="knowledge-section-title">
-          <Upload size={18} />
-          <strong>表格资料导入与发布</strong>
-        </div>
-        <div className="customer-intake-grid">
-          <article>
-            <span>AI 服务</span>
-            <strong>{aiServiceStatus.data?.label ?? (aiServiceStatus.status === "loading" ? "读取中" : "未读取")}</strong>
-            <small>{aiServiceStatus.data?.customer_visible_detail ?? aiServiceStatus.message}</small>
-          </article>
-          <article>
-            <span>表格行</span>
-            <strong>{templateImportRows.length} 行</strong>
-            <small>导入后先成为草稿批次，发布前不会进入 AI 自动回复。</small>
-          </article>
-          <article>
-            <span>预检结果</span>
-            <strong>{templateImportDraft.precheck ? `${templateImportDraft.precheck.valid_count}/${templateImportDraft.precheck.row_count}` : "待预检"}</strong>
-            <small>{templateImportDraft.precheck ? `错误 ${templateImportDraft.precheck.error_count} · 警告 ${templateImportDraft.precheck.warning_count}` : "检查必填、重复、风险等级和状态。"}</small>
-          </article>
-          <article>
-            <span>发布版本</span>
-            <strong>{templateImportDraft.publication ? `v${templateImportDraft.publication.version}` : "未发布"}</strong>
-            <small>{templateImportDraft.importBatch ? `草稿批次 #${templateImportDraft.importBatch.id}` : "发布后 AI 才引用 active 标准问答。"}</small>
-          </article>
-        </div>
-        <label className="field">
-          <span>表格内容</span>
-          <textarea
-            value={templateImportDraft.text}
-            onChange={(event) =>
-              onTemplateImportDraftChange({
-                ...templateImportDraft,
-                text: event.target.value,
-                status: "idle",
-                message: "表格已修改，请重新预检。",
-                precheck: null,
-                importBatch: null,
-                sampleRun: null,
-                publication: null
-              })
-            }
-            rows={7}
-            spellCheck={false}
-            disabled={!hasToken || templateImportDraft.status === "loading"}
-          />
-        </label>
-        <div className="knowledge-form-grid">
-          <label>
-            <span>来源标识</span>
-            <input
-              value={templateImportDraft.sourceFileRef}
-              onChange={(event) => onTemplateImportDraftChange({ ...templateImportDraft, sourceFileRef: event.target.value })}
-              disabled={!hasToken || templateImportDraft.status === "loading"}
-            />
-          </label>
-        </div>
-        <div className="customer-knowledge-release-actions">
-          <button type="button" className="secondary-action" onClick={onPrecheckTemplateImport} disabled={!hasToken || !canImport || templateImportDraft.status === "loading"}>
-            <Search size={16} />
-            预检表格
-          </button>
-          <button type="button" className="secondary-action" onClick={onCreateTemplateImport} disabled={!hasToken || !canImport || templateImportDraft.status === "loading"}>
-            <Upload size={16} />
-            导入草稿
-          </button>
-          <button type="button" className="secondary-action" onClick={onRunTemplateSample} disabled={!hasToken || !canImport || templateImportDraft.status === "loading" || !templateImportDraft.importBatch}>
-            <Search size={16} />
-            样题试跑
-          </button>
-          <button type="button" className="primary-action" onClick={onPublishTemplateImport} disabled={!hasToken || !canImport || templateImportDraft.status === "loading" || !templateImportDraft.importBatch}>
-            <CheckCircle2 size={16} />
-            发布给 AI
-          </button>
-        </div>
-        <PanelStateNotice status={templateImportDraft.status} message={templateImportDraft.message} loadingMessage="正在处理表格资料。" />
-        {templateImportDraft.sampleRun ? (
-          <div className="knowledge-result-note">
-            试跑：命中 {templateImportDraft.sampleRun.hit_cases} · 低置信 {templateImportDraft.sampleRun.low_confidence_cases} · 风险阻断 {templateImportDraft.sampleRun.blocked_cases}
-          </div>
-        ) : null}
-      </section>
-
-      <section
-        className="customer-knowledge-center"
-        data-h2w2-knowledge-center="true"
-        data-h2w3b-customer-knowledge-flow="true"
-        data-h2w-kb3-knowledge-center="true"
-      >
-        <div className="customer-knowledge-center-head">
-          <div>
-            <span>客户知识中心</span>
-            <strong>按四层资料维护客服知识</strong>
-          </div>
-          <small>先整理业务对象、标准问答、流程政策、禁用承诺与转人工规则；启用前先复测，不会触发外部平台发送。</small>
-        </div>
-        <div className="customer-knowledge-layer-grid">
-          <article data-h2w2-layer="business-object" data-h2w3b-step="business-object">
-            <span>第一步</span>
-            <strong>业务对象</strong>
-            <p>商品、服务、套餐、课程和门店先建对象，再补别名，让系统知道客户在问哪一类业务。</p>
-            <em>{state.businessObjects.length} 个对象</em>
-          </article>
-          <article data-h2w2-layer="standard-qa" data-h2w3b-step="standard-qa">
-            <span>第二步</span>
-            <strong>标准问答</strong>
-            <p>把常见问法、标准答案和触发关键词绑定到对象上，高置信问题才进入可用回复候选。</p>
-            <em>{objectCardTotal} 张问答卡</em>
-          </article>
-          <article data-h2w2-layer="process-policy" data-h2w3b-step="process-policy">
-            <span>第三步</span>
-            <strong>流程政策</strong>
-            <p>售后、发票、退款、质保和服务流程用文档或更新包导入，发布前先做差异预检和样题试跑。</p>
-            <em>{policyDocuments.length} 份政策文档</em>
-          </article>
-          <article data-h2w2-layer="risk-rules" data-h2w3b-step="risk-rules">
-            <span>第四步</span>
-            <strong>禁用承诺与转人工规则</strong>
-            <p>风险词会进入自动回复策略；客户消息命中后转人工或阻断，避免承诺赔付、绕平台或高风险话术。</p>
-            <em>{replyPolicyRuleCount || ruleDocuments.length} 条规则</em>
-          </article>
-        </div>
-      </section>
-
-      <section className="customer-knowledge-publish-flow" data-h2w2-publish-flow="true" data-h2w3b-enable-flow="true">
-        <div className="knowledge-section-title">
-          <CheckCircle2 size={18} />
-          <strong>启用与回归检查</strong>
-        </div>
-        <div className="customer-knowledge-publish-grid">
-          <article data-h2w2-publish-step="select-policy">
-            <span>选择待启用文档</span>
-            <strong>{readyDraftCount} 份可试跑</strong>
-            <small>完成索引的文档才能进入样题试跑；没有来源、没有片段或没有题库会被阻断。</small>
-          </article>
-          <article data-h2w2-publish-step="precheck-samples">
-            <span>回归题检查</span>
-            <strong>{passedPrecheckCount} 次通过</strong>
-            <small>检查命中、引用、期望词和转人工规则；这是发布门禁，不是完整客服准确率。</small>
-          </article>
-          <article data-h2w2-publish-step="version-record">
-            <span>版本记录</span>
-            <strong>{publishedDocumentCount} 份启用</strong>
-            <small>发布后写入版本、发布人、门禁结果和回滚记录；回滚只暂停 active 检索。</small>
-          </article>
-          <article data-h2w2-publish-boundary="no-external-write">
-            <span>安全边界</span>
-            <strong>{blockedPublicationCount} 条阻断</strong>
-            <small>知识发布只影响本地检索库，不会触发网站、微信客服、企业微信、公众号或小程序真实外发。</small>
-          </article>
-        </div>
-      </section>
-
-      <section className="customer-knowledge-release-card" data-h2w11d-customer-publish-path="true">
-        <div className="customer-knowledge-release-head">
-          <div>
-            <span>知识维护总流程</span>
-            <strong>导入资料 → 预检 → 发布 → 复测 → 确认 → 质量报告</strong>
-          </div>
-          <small>
-            这里会更新本地知识库、评测记录和质量报告；真实外发继续关闭。客户确认记录不是正式验收，正式渠道发送必须另走授权和白名单。
-          </small>
-        </div>
-        <div className="customer-knowledge-release-steps" aria-label="知识维护总流程状态">
-          {customerPublishStepState.map((step, index) => (
-            <article key={step.key} className={`release-step release-step-${step.tone}`}>
-              <span>{String(index + 1).padStart(2, "0")} · {step.label}</span>
-              <strong>{step.value}</strong>
-              <small>{step.note}</small>
-            </article>
-          ))}
-        </div>
-        <div className="customer-knowledge-release-actions">
-          <button
-            type="button"
-            className="secondary-action"
-            data-h2w11d-action="convert-customer-intake"
-            onClick={applyCustomerKnowledgeIntakePackage}
-            disabled={!hasToken || updatePackageIsLoading}
-          >
-            <Upload size={16} />
-            生成资料包
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            data-h2w11d-action="preview-update-package"
-            onClick={onPreviewUpdatePackage}
-            disabled={!hasToken || !canImport || updatePackageIsLoading}
-          >
-            <Search size={16} />
-            检查资料包
-          </button>
-          <button
-            type="button"
-            className="primary-action"
-            data-h2w11d-action="import-update-package"
-            onClick={onImportUpdatePackage}
-            disabled={!hasToken || !canImport || updatePackageIsLoading}
-          >
-            <Upload size={16} />
-            导入知识库
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            data-h2w11d-action="publish-precheck-first-ready-document"
-            onClick={() => {
-              if (firstReadyDocument) {
-                onCheckPublishDocument(firstReadyDocument);
-              }
-            }}
-            disabled={!hasToken || !canImport || isLoading || !firstReadyDocument}
-            title={firstReadyDocumentActionTitle}
-            aria-label={firstReadyDocumentActionTitle}
-          >
-            <Search size={16} />
-            启用前复测
-          </button>
-          <button
-            type="button"
-            className="primary-action"
-            data-h2w11d-action="publish-first-ready-document"
-            onClick={() => {
-              if (firstReadyDocument) {
-                onPublishDocument(firstReadyDocument);
-              }
-            }}
-            disabled={!hasToken || !canImport || isLoading || !firstReadyDocument}
-            title={firstReadyDocumentActionTitle}
-            aria-label={firstReadyDocumentActionTitle}
-          >
-            <CheckCircle2 size={16} />
-            启用知识
-          </button>
-          <a className="ghost-link" data-h2w11d-action="open-evaluation-page" href="#evals">
-            查看复测题库
-          </a>
-          <a className="ghost-link" data-h2w11d-action="open-quality-report-page" href="#quality">
-            查看质量报告
-          </a>
-        </div>
-      </section>
-
-      <section className="customer-knowledge-intake-card" data-h2w3c-customer-intake="true">
-        <div className="knowledge-section-title">
-          <Upload size={18} />
-          <strong>客户资料整理</strong>
-        </div>
-        <p>
-          先让客户按表格模板整理业务对象、标准问答、流程政策和风险规则；系统会生成知识资料包，再进入检查和导入流程。
-          CSV 模板可直接转换为资料包；XLSX 模板用于客户填写，试跑 v1 先另存为 CSV 后导入。PDF、DOCX 原件只作为来源留档。
-        </p>
-        <div className="customer-intake-grid">
-          <article>
-            <span>CSV 模板</span>
-            <strong>可直接转换</strong>
-            <small>适合从 Excel 或表格软件另存为 CSV 后粘贴；转换后复用资料包检查。</small>
-          </article>
-          <article>
-            <span>XLSX 模板</span>
-            <strong>试跑入口</strong>
-            <small>交付档案提供同列名模板；本地试跑 v1 先另存为 CSV 后导入。</small>
-          </article>
-          <article>
-            <span>资料包草稿</span>
-            <strong>真实检查 / 导入</strong>
-            <small>转换结果会写入下方资料包内容，不会跳过检查直接入库。</small>
-          </article>
-          <article>
-            <span>PDF / DOCX</span>
-            <strong>先做来源留档</strong>
-            <small>当前不承诺自动解析；需要先转成模板字段或由人工整理后导入。</small>
-          </article>
-          <article>
-            <span>确认口径</span>
-            <strong>导入不等于启用</strong>
-            <small>完成检查、导入、复测和启用后，才能进入客户确认记录。</small>
-          </article>
-        </div>
-        <label className="field">
-          <span>客户资料 CSV</span>
-          <textarea
-            data-h2w3c-customer-intake-field="csv"
-            value={customerKnowledgeIntakeText}
-            onChange={(event) => setCustomerKnowledgeIntakeText(event.target.value)}
-            rows={7}
-          />
-        </label>
-        <div className="customer-intake-actions">
-          <button
-            type="button"
-            className="secondary-action"
-            data-h2w3c-action="download-customer-intake-csv"
-            onClick={() =>
-              downloadTextFile(
-                customerKnowledgeIntakeText,
-                "万法常世_客户知识资料导入模板.csv",
-                "text/csv;charset=utf-8"
-              )
-            }
-          >
-            <FileText size={16} />
-            下载 CSV 模板
-          </button>
-          <button
-            type="button"
-            className="primary-action"
-            data-h2w3c-action="convert-customer-intake"
-            onClick={applyCustomerKnowledgeIntakePackage}
-          >
-            <Upload size={16} />
-            生成资料包
-          </button>
-          <span>
-            将生成 {customerKnowledgeIntakeCounts.businessObjects} 个对象、{customerKnowledgeIntakeCounts.objectCards} 张问答卡、
-            {customerKnowledgeIntakeCounts.documents} 份文档、{customerKnowledgeIntakeCounts.cases} 道回归题。
-          </span>
-        </div>
-      </section>
-
-      <section className="reply-policy-editor-card" data-h2w2-reply-policy-editor="true">
-        <div className="knowledge-section-title">
-          <ShieldCheck size={18} />
-          <strong>自动回复策略</strong>
-        </div>
-        <p>
-          这里维护的词会写入本地自动回复策略。命中禁止承诺词时不自动回复；命中转人工词时进入人工接待。
-        </p>
-        <div className="field-grid two-cols">
-          <label className="field">
-            <span>禁止承诺词</span>
-            <textarea
-              data-h2w2-field="blocked-policy-terms"
-              value={replyStrategyDraft.blockedPolicyTerms}
-              onChange={(event) =>
-                onReplyStrategyDraftChange({
-                  ...replyStrategyDraft,
-                  blockedPolicyTerms: event.target.value
-                })
-              }
-              placeholder="私下转账，绕过平台，保证收益，无条件退款"
-              rows={4}
-              disabled={!hasToken || replyStrategyState.status === "loading"}
-            />
-          </label>
-          <label className="field">
-            <span>转人工词</span>
-            <textarea
-              data-h2w2-field="manual-review-terms"
-              value={replyStrategyDraft.manualReviewTerms}
-              onChange={(event) =>
-                onReplyStrategyDraftChange({
-                  ...replyStrategyDraft,
-                  manualReviewTerms: event.target.value
-                })
-              }
-              placeholder="投诉，起诉，赔偿，举报，差评，封号"
-              rows={4}
-              disabled={!hasToken || replyStrategyState.status === "loading"}
-            />
-          </label>
-        </div>
-        <label className="reply-policy-toggle">
-          <input
-            type="checkbox"
-            checked={replyStrategyDraft.forceDraftOnly}
-            onChange={(event) =>
-              onReplyStrategyDraftChange({
-                ...replyStrategyDraft,
-                forceDraftOnly: event.target.checked
-              })
-            }
-            disabled={!hasToken || replyStrategyState.status === "loading"}
-          />
-          <span>暂时只生成回复草稿，不自动发送</span>
-        </label>
-        <div className="reply-policy-save-row">
-          <button
-            type="button"
-            className="secondary-action"
-            data-h2w2-action="save-reply-strategy"
-            onClick={onSaveReplyStrategy}
-            disabled={!hasToken || !canImport || replyStrategyState.status === "loading"}
-          >
-            <CheckCircle2 size={16} />
-            保存自动回复策略
-          </button>
-          <span>
-            {replyStrategyState.status === "ready" && replyStrategyState.data
-              ? `当前版本：${replyStrategyState.data.strategy_version || "本地策略"}`
-              : replyStrategyState.message}
-          </span>
-        </div>
-        <DisabledReason show={Boolean(replyStrategyDisabledReason)} reason={replyStrategyDisabledReason} />
-        {replyStrategyState.message ? (
-          <PanelStateNotice
-            status={replyStrategyState.status === "idle" ? "ready" : replyStrategyState.status}
-            message={replyStrategyState.message}
-            compact
-          />
-        ) : null}
-      </section>
-
-      <section className="knowledge-update-package-card" data-knowledge-update-package="p3-06u-26h2d">
-        <div className="knowledge-section-title">
-          <Upload size={18} />
-          <strong>知识资料包导入</strong>
-        </div>
-        <p>
-          用于导入新增业务对象、标准问答、政策文档和回归题。先检查资料包，确认新增、跳过和错误项后再导入；导入过程不会触发外部平台发送。
-        </p>
-        <label className="field">
-          <span>资料包内容</span>
-          <textarea
-            data-knowledge-update-package-field="json"
-            value={updatePackageDraft.text}
-            onChange={(event) =>
-              onUpdatePackageDraftChange({
-                ...updatePackageDraft,
-                text: event.target.value,
-                status: "idle",
-                message: "已修改，请重新检查资料包"
-              })
-            }
-            rows={12}
-            disabled={!hasToken || updatePackageIsLoading}
-          />
-        </label>
-        <div className="knowledge-update-package-actions">
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={onPreviewUpdatePackage}
-            disabled={!hasToken || !canImport || updatePackageIsLoading}
-          >
-            <Search size={16} />
-            检查资料包
-          </button>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={onImportUpdatePackage}
-            disabled={!hasToken || !canImport || updatePackageIsLoading}
-          >
-            <Upload size={16} />
-            导入资料包
-          </button>
-        </div>
-        <DisabledReason show={Boolean(updatePackageDisabledReason)} reason={updatePackageDisabledReason} />
-        {updatePackageDraft.message ? (
-          <PanelStateNotice
-            status={updatePackageDraft.status === "idle" ? "ready" : updatePackageDraft.status}
-            message={updatePackageDraft.message}
-            compact
-          />
-        ) : null}
-        {updatePackageResult ? (
-          <div className="knowledge-update-package-result" data-knowledge-update-package-result="diff">
-            <div className="knowledge-update-package-summary">
-              <article>
-                <span>新增</span>
-                <strong>{updatePackageResult.operation_counts.create ?? 0}</strong>
-              </article>
-              <article>
-                <span>跳过</span>
-                <strong>{updatePackageResult.operation_counts.skip ?? 0}</strong>
-              </article>
-              <article>
-                <span>错误</span>
-                <strong>{updatePackageResult.operation_counts.error ?? 0}</strong>
-              </article>
-              <article>
-                <span>导入批次</span>
-                <strong>{updatePackageResult.import_batch_id ? `#${updatePackageResult.import_batch_id}` : "预检"}</strong>
-              </article>
-            </div>
-            <div className="knowledge-update-package-meta">
-              <span>{updatePackageResult.package_name}</span>
-              <span>{updatePackageResult.schema_version}</span>
-              <span>{updatePackageResult.dry_run ? "仅预检" : "已导入"}</span>
-              <span>{updatePackageResult.can_apply ? "可应用" : "需修正"}</span>
-            </div>
-            {updatePackageResult.operations.length > 0 ? (
-              <div className="knowledge-update-package-ops">
-                {updatePackageResult.operations.slice(0, 8).map((operation, index) => (
-                  <article key={`${operation.resource_type}-${operation.title}-${index}`} className={`op-${operation.action}`}>
-                    <span>{formatKnowledgeUpdateResourceType(operation.resource_type)}</span>
-                    <strong>{operation.title}</strong>
-                    <small>{formatKnowledgeUpdateAction(operation.action)} · {operation.reason}</small>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-            {updatePackageResult.warnings.length > 0 ? (
-              <div className="knowledge-update-package-warnings">
-                {updatePackageResult.warnings.map((warning) => (
-                  <span key={warning}>{warning}</span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-
-      <div className="business-knowledge-layout">
-        <form
-          className="business-object-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onCreateBusinessObject();
-          }}
-        >
-          <div className="knowledge-section-title">
-            <Bot size={18} />
-            <strong>{businessObjectDraft.editingId ? "编辑业务对象" : "业务对象知识库"}</strong>
-          </div>
-          <p className="form-hint">先维护商品、服务或套餐，再为每个对象挂标准问答；客服回复、质检复盘和知识缺口都会回到对象层。</p>
-          <div className="field-grid two-cols">
-            <label className="field">
-              <span>对象类型</span>
-              <select
-                value={businessObjectDraft.type}
-                onChange={(event) =>
-                  onBusinessObjectDraftChange({
-                    ...businessObjectDraft,
-                    type: event.target.value as BusinessObjectType
-                  })
-                }
-                disabled={!hasToken || isLoading}
-              >
-                {businessObjectOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>对象名称</span>
-              <input
-                data-knowledge-field="business-object-title"
-                value={businessObjectDraft.title}
-                onChange={(event) => onBusinessObjectDraftChange({ ...businessObjectDraft, title: event.target.value })}
-                placeholder="例如：AI 客服入门验证包"
-                disabled={!hasToken || isLoading}
-              />
-            </label>
-          </div>
-          <label className="field">
-            <span>别名 / 触发说法</span>
-            <input
-              data-knowledge-field="business-object-aliases"
-              value={businessObjectDraft.aliases}
-              onChange={(event) => onBusinessObjectDraftChange({ ...businessObjectDraft, aliases: event.target.value })}
-              placeholder="入门版，Lite A，官网客服试点"
-              disabled={!hasToken || isLoading}
-            />
-          </label>
-          <label className="field">
-            <span>对象说明</span>
-            <textarea
-              data-knowledge-field="business-object-summary"
-              value={businessObjectDraft.summary}
-              onChange={(event) => onBusinessObjectDraftChange({ ...businessObjectDraft, summary: event.target.value })}
-              placeholder="适用客户、交付边界、禁止承诺、推荐话术"
-              rows={4}
-              disabled={!hasToken || isLoading}
-            />
-          </label>
-          <button type="submit" className="primary-action" data-knowledge-action="create-business-object" disabled={!hasToken || !canImport || isLoading}>
-            <BookOpen size={17} />
-            {businessObjectDraft.editingId ? "更新业务对象" : "新增业务对象"}
-          </button>
-          {businessObjectDraft.editingId ? (
-            <button
-              type="button"
-              className="secondary-action"
-              data-knowledge-action="cancel-edit-business-object"
-              onClick={() => onBusinessObjectDraftChange({ editingId: null, type: "product", title: "", aliases: "", summary: "" })}
-            >
-              取消编辑
+      <div className="knowledge-console-body">
+        <aside className="knowledge-category-pane" aria-label="资料分类">
+          <div className="knowledge-category-head">
+            <strong>问题分类</strong>
+            <button type="button" onClick={addKnowledgeCategory} disabled={!hasToken || !canImport || isLoading} aria-label="添加问题分类">
+              +
             </button>
-          ) : null}
-          <DisabledReason show={Boolean(businessObjectDisabledReason)} reason={businessObjectDisabledReason} />
-        </form>
-
-        <div className="business-object-board">
-          <div className="knowledge-section-title">
-            <FileText size={18} />
-            <strong>对象问答卡</strong>
           </div>
-          {state.businessObjects.length === 0 ? (
-            <WorkspaceStateNotice
-              kind={hasToken ? "empty" : "demo"}
-              title="暂无业务对象"
-              message="先创建商品、服务或套餐对象，再补充对应的标准问答。"
-              compact
-            />
-          ) : (
-            <div className="business-object-grid" data-business-object-knowledge="object-list">
-              {state.businessObjects.slice(0, 8).map((item) => {
-                const cards = state.objectCardsByObject[item.id] ?? [];
-                const selected = item.id === selectedBusinessObjectId;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={`business-object-card ${selected ? "selected" : ""}`}
-                    onClick={() =>
-                      onObjectKnowledgeCardDraftChange({
-                        ...objectKnowledgeCardDraft,
-                        businessObjectId: item.id
-                      })
-                    }
-                  >
-                    <span>{formatBusinessObjectType(item.type)}</span>
-                    <strong>{item.title}</strong>
-                    <small>{item.aliases.length > 0 ? item.aliases.slice(0, 3).join(" / ") : "未配置别名"}</small>
-                    <em>{cards.length || item.knowledge_card_count} 张问答卡</em>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {selectedBusinessObject ? (
-            <div className="business-object-edit-row">
+          {knowledgeCategories.map((category) => (
+            <button
+              key={category.category}
+              type="button"
+              className={activeKnowledgeCategory === category.category ? "active" : ""}
+              onClick={() => {
+                setActiveKnowledgeCategory(category.category);
+                onListViewChange({ ...listView, page: 1 });
+              }}
+            >
+              <span>{category.label}</span>
+              <small>{category.count}</small>
+            </button>
+          ))}
+        </aside>
+
+        <div className="knowledge-table-pane">
+          <div className="knowledge-toolbar">
+            <div className="knowledge-toolbar-left">
+              <button type="button" className="primary-action compact" onClick={openSingleEditor} disabled={!hasToken || !canImport || isLoading}>
+                <Upload size={15} />
+                添加问题
+              </button>
               <button
                 type="button"
-                className="secondary-action"
-                data-knowledge-action="edit-business-object"
-                onClick={() =>
-                  onBusinessObjectDraftChange({
-                    editingId: selectedBusinessObject.id,
-                    type: selectedBusinessObject.type,
-                    title: selectedBusinessObject.title,
-                    aliases: selectedBusinessObject.aliases.join("，"),
-                    summary: selectedBusinessObject.summary
-                  })
-                }
+                className="ghost-action compact"
+                onClick={() => runBulkStatusUpdate("active")}
+                disabled={!hasToken || !canImport || isLoading || selectedDocuments.length === 0}
               >
-                编辑业务对象
+                启用
+              </button>
+              <button
+                type="button"
+                className="ghost-action compact"
+                onClick={() => runBulkStatusUpdate("draft")}
+                disabled={!hasToken || !canImport || isLoading || selectedDocuments.length === 0}
+              >
+                停用
+              </button>
+              <button
+                type="button"
+                className="ghost-action compact danger"
+                onClick={runBulkDelete}
+                disabled={!hasToken || !canImport || isLoading || selectedDocuments.length === 0}
+              >
+                删除
+              </button>
+              {selectedDocuments.length > 0 ? <span className="knowledge-selection-count">已选 {selectedDocuments.length} 条</span> : null}
+            </div>
+            <div className="knowledge-toolbar-right">
+              <select
+                value={listView.status}
+                onChange={(event) => onListViewChange({ ...listView, status: event.target.value, page: 1 })}
+                aria-label="资料状态"
+              >
+                <option value="all">全部状态</option>
+                <option value="active">已启用</option>
+                <option value="draft">已停用</option>
+              </select>
+              <label className="knowledge-table-search">
+                <input
+                  value={listView.query}
+                  onChange={(event) => onListViewChange({ ...listView, query: event.target.value, page: 1 })}
+                  placeholder="请输入搜索的问题"
+                  type="search"
+                />
+                <Search size={16} />
+              </label>
+              <button type="button" className="ghost-action compact" onClick={openBatchEditor} disabled={!hasToken || !canImport || isLoading}>
+                <Upload size={15} />
+                导入
+              </button>
+              <button type="button" className="ghost-action compact" onClick={exportKnowledgeDocuments} disabled={!hasToken || isLoading || visibleDocuments.length === 0}>
+                <FileText size={15} />
+                导出
               </button>
             </div>
-          ) : null}
-
-          <form
-            className="object-knowledge-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onCreateObjectKnowledgeCard();
-            }}
-          >
-            <label className="field">
-              <span>所属对象</span>
-              <select
-                value={selectedBusinessObjectId ?? ""}
-                onChange={(event) =>
-                  onObjectKnowledgeCardDraftChange({
-                    ...objectKnowledgeCardDraft,
-                    businessObjectId: event.target.value ? Number(event.target.value) : null
-                  })
-                }
-                disabled={!hasToken || isLoading || state.businessObjects.length === 0}
-              >
-                {state.businessObjects.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {formatBusinessObjectType(item.type)} · {item.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>客户会怎么问</span>
-              <input
-                data-knowledge-field="object-card-question"
-                value={objectKnowledgeCardDraft.question}
-                onChange={(event) =>
-                  onObjectKnowledgeCardDraftChange({ ...objectKnowledgeCardDraft, question: event.target.value })
-                }
-                placeholder="例如：入门验证包适合什么客户？"
-                disabled={!hasToken || isLoading}
-              />
-            </label>
-            <label className="field">
-              <span>标准答案</span>
-              <textarea
-                data-knowledge-field="object-card-answer"
-                value={objectKnowledgeCardDraft.answer}
-                onChange={(event) =>
-                  onObjectKnowledgeCardDraftChange({ ...objectKnowledgeCardDraft, answer: event.target.value })
-                }
-                placeholder="直接可用于客服回复的答案，同时写清楚不能承诺的部分。"
-                rows={4}
-                disabled={!hasToken || isLoading}
-              />
-            </label>
-            <label className="field">
-              <span>触发关键词</span>
-              <input
-                data-knowledge-field="object-card-keywords"
-                value={objectKnowledgeCardDraft.triggerKeywords}
-                onChange={(event) =>
-                  onObjectKnowledgeCardDraftChange({
-                    ...objectKnowledgeCardDraft,
-                    triggerKeywords: event.target.value
-                  })
-                }
-                placeholder="试点，入门，官网客服"
-                disabled={!hasToken || isLoading}
-              />
-            </label>
-            <button
-              type="submit"
-              className="secondary-action"
-              data-knowledge-action="create-object-card"
-              disabled={!hasToken || !canImport || isLoading || state.businessObjects.length === 0}
-            >
-              绑定问答卡
-            </button>
-            <DisabledReason
-              show={Boolean(objectCardDisabledReason) || state.businessObjects.length === 0}
-              reason={state.businessObjects.length === 0 ? "请先新增一个业务对象，再绑定标准问答卡。" : objectCardDisabledReason}
-            />
-            {selectedBusinessObject ? (
-              <div className="object-knowledge-list">
-                {(state.objectCardsByObject[selectedBusinessObject.id] ?? []).slice(0, 3).map((card) => (
-                  <article key={card.id}>
-                    <strong>{card.question}</strong>
-                    <p>{card.answer}</p>
-                    <small>{card.trigger_keywords.length > 0 ? card.trigger_keywords.join(" / ") : "未配置关键词"}</small>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-          </form>
-        </div>
-      </div>
-
-      <section className="reply-decision-state-card" aria-label="自动回复处理方式" data-reply-decision-state-machine="p3-06u-20">
-        <div className="knowledge-section-title">
-          <ShieldCheck size={18} />
-          <strong>自动回复处理方式</strong>
-        </div>
-        <p>
-          客户消息会先命中业务对象，再匹配对象问答卡；高置信问题生成回复草稿，风险、低置信和未覆盖问题会进入转人工或知识缺口。
-          真实发送动作由渠道授权、白名单和转人工策略共同控制。
-        </p>
-        <div className="reply-decision-flow">
-          <article>
-            <span>1</span>
-            <strong>业务对象</strong>
-            <small>商品、服务、套餐和别名先被识别，避免只靠散乱 FAQ。</small>
-          </article>
-          <article>
-            <span>2</span>
-            <strong>对象问答卡</strong>
-            <small>问题、触发关键词和标准答案共同决定置信度。</small>
-          </article>
-          <article>
-            <span>3</span>
-            <strong>风险门禁</strong>
-            <small>投诉、赔付、法务或平台风险词会转人工或直接阻断。</small>
-          </article>
-          <article>
-            <span>4</span>
-            <strong>处理控制</strong>
-            <small>符合策略的回复进入可用草稿；真实发送继续受渠道授权控制。</small>
-          </article>
-        </div>
-        <div className="reply-decision-state-grid">
-          <article className="state-ready">
-            <span>可自动回复</span>
-            <strong>高置信对象问答卡</strong>
-            <small>生成可直接使用的回复，并记录命中来源。</small>
-          </article>
-          <article className="state-review">
-            <span>转人工</span>
-            <strong>低置信或风险词</strong>
-            <small>进入坐席复核，保留草稿和原因。</small>
-          </article>
-          <article className="state-gap">
-            <span>知识缺口</span>
-            <strong>无对象或无可信卡</strong>
-            <small>回到知识运营补对象、别名或问答卡。</small>
-          </article>
-          <article className="state-blocked">
-            <span>策略阻断</span>
-            <strong>平台/合规风险</strong>
-            <small>不生成可用回复，保留复盘原因。</small>
-          </article>
-        </div>
-      </section>
-
-      <div className="knowledge-layout">
-        <form
-          className="knowledge-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onImportDocument();
-          }}
-        >
-          <div className="knowledge-section-title">
-            <Upload size={18} />
-            <strong>导入知识文档</strong>
           </div>
-          <div className="knowledge-edit-checklist" data-knowledge-ops-smoke="edit-checklist">
-            <span>发布前必须写清</span>
-            <ul>
-              <li>适用问题</li>
-              <li>标准答案</li>
-              <li>禁止承诺</li>
-              <li>引用来源</li>
-              <li>生效范围</li>
-              <li>版本和审核状态</li>
-            </ul>
-          </div>
-          <label className="field">
-            <span>文档标题</span>
-            <input
-              data-knowledge-field="document-title"
-              value={draft.title}
-              onChange={(event) => onDraftChange({ ...draft, title: event.target.value })}
-              placeholder="例如：售后质保政策"
-              disabled={!hasToken || isLoading}
-            />
-          </label>
-          <label className="field">
-            <span>来源链接</span>
-            <input
-              data-knowledge-field="document-source-uri"
-              value={draft.sourceUri}
-              onChange={(event) => onDraftChange({ ...draft, sourceUri: event.target.value })}
-              placeholder="官网、手册、内部文档地址"
-              disabled={!hasToken || isLoading}
-            />
-          </label>
-          <label className="field">
-            <span>标签</span>
-            <input
-              data-knowledge-field="document-tags"
-              value={draft.tags}
-              onChange={(event) => onDraftChange({ ...draft, tags: event.target.value })}
-              placeholder="售后，质保，发票"
-              disabled={!hasToken || isLoading}
-            />
-          </label>
-          <label className="field">
-            <span>正文</span>
-            <textarea
-              data-knowledge-field="document-raw-text"
-              value={draft.rawText}
-              onChange={(event) => onDraftChange({ ...draft, rawText: event.target.value })}
-              placeholder={"适用问题：客户会怎么问？\n标准答案：可以直接引用的回答是什么？\n禁止承诺：哪些赔付、时效或结果不能承诺？\n引用来源：来自哪份官网、手册或内部政策？\n生效范围：适用于哪些渠道、产品和时间范围？"}
-              disabled={!hasToken || isLoading}
-              rows={8}
-            />
-          </label>
-          <button type="submit" className="primary-action" data-knowledge-action="import-document" disabled={!hasToken || !canImport || isLoading}>
-            <FileText size={17} />
-            {canImport ? "导入知识文档" : "仅管理员可导入"}
-          </button>
-          <DisabledReason show={Boolean(importDisabledReason)} reason={importDisabledReason} />
-        </form>
 
-        <div className="knowledge-document-list">
-          <div className="knowledge-section-title">
-            <BookOpen size={18} />
-            <strong>已索引文档</strong>
-          </div>
-          {state.documents.length === 0 && state.status === "ready" ? (
-            <WorkspaceStateNotice
-              kind="empty"
-              title="暂无数据"
-              message="暂无 active 知识文档。导入、审核并发布后，文档才会进入客服检索链路。"
-              compact
-            />
-          ) : null}
-          <ListToolbar
-            view={listView}
-            total={state.documents.length}
-            filteredTotal={pagedDocuments.total}
-            statusOptions={[
-              { label: "全部", value: "all" },
-              { label: "已启用", value: "active" },
-              { label: "草稿", value: "draft" },
-              { label: "已归档", value: "archived" },
-              { label: "已索引", value: "indexed" },
-              { label: "处理中", value: "processing" }
-            ]}
-            searchPlaceholder="搜索文档标题、来源、标签"
-            onChange={onListViewChange}
-          />
-          {pagedDocuments.items.map((document) => {
-            const chunks = state.chunksByDocument[document.id] ?? [];
-            const publications = state.publicationsByDocument[document.id] ?? [];
-            const latestPublication = publications[0] ?? null;
-            const hasPublishedRecord = publications.some((publication) => publication.status === "published");
-            const latestCaseResults = latestPublication?.case_results ?? [];
-            return (
-              <article key={document.id} className="knowledge-document-row">
-                <div className="knowledge-document-head">
-                  <div>
+          <table className="knowledge-data-table">
+            <thead>
+              <tr>
+                <th className="checkbox-col">
+                  <input
+                    type="checkbox"
+                    checked={allPageDocumentsSelected}
+                    aria-checked={somePageDocumentsSelected ? "mixed" : allPageDocumentsSelected}
+                    onChange={(event) => togglePageSelection(event.target.checked)}
+                    disabled={!hasToken || !canImport || isLoading || pagedDocuments.items.length === 0}
+                    aria-label="选择当前页资料"
+                  />
+                </th>
+                <th>标准问题</th>
+                <th>答案摘要</th>
+                <th>当前状态</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pagedDocuments.items.map((document) => (
+                <tr key={document.id}>
+                  <td className="checkbox-col">
+                    <input
+                      type="checkbox"
+                      checked={selectedDocumentIds.includes(document.id)}
+                      onChange={(event) => toggleDocumentSelection(document.id, event.target.checked)}
+                      disabled={!hasToken || !canImport || isLoading}
+                      aria-label={`选择${document.title}`}
+                    />
+                  </td>
+                  <td>
                     <strong>{document.title}</strong>
-                    <span>{document.status} · {document.ingestion_status} · {document.chunk_count} 个片段</span>
-                  </div>
-                  <small>{formatTags(document.tags)}</small>
-                </div>
-                <p className="citation-line">
-                  引用来源：{document.source_uri || "未填写来源"} · hash {document.content_hash.slice(0, 10)}
-                </p>
-                <div className="publication-card">
-                  {latestPublication ? (
-                    <>
-                      <div className="publication-card-head">
-                        <div>
-                          <span>最新发布记录</span>
-                          <strong>
-                            {formatPublicationType(latestPublication.publication_type)} ·{" "}
-                            {formatPublicationStatus(latestPublication.status)}
-                          </strong>
-                        </div>
-                        <small>
-                          #{latestPublication.id} · {formatDateTime(latestPublication.created_at)}
-                        </small>
-                      </div>
-                      <div className="publication-grid">
-                        <div>
-                          <span>状态流转</span>
-                          <strong>
-                            {latestPublication.from_status || "-"} → {latestPublication.to_status || "-"}
-                          </strong>
-                        </div>
-                        <div>
-                          <span>回归运行</span>
-                          <strong>
-                            {latestPublication.evaluation_run_id
-                              ? `#${latestPublication.evaluation_run_id}`
-                              : "未运行"}
-                          </strong>
-                        </div>
-                        <div>
-                          <span>阻断项</span>
-                          <strong>
-                            {latestPublication.blocking_reasons.length > 0
-                              ? latestPublication.blocking_reasons.slice(0, 2).join(" / ")
-                              : "无"}
-                          </strong>
-                        </div>
-                      </div>
-                      {latestCaseResults.length > 0 ? (
-                        <div className="publication-case-list">
-                          {latestCaseResults.slice(0, 3).map((item, index) => (
-                            <span key={`${latestPublication.id}-${index}`}>
-                              题 {publicationCaseValue(item, "evaluation_case_id")}：
-                              {publicationCaseValue(item, "status")}
-                              {publicationCaseValue(item, "blocking") === "true" ? " · 阻断" : ""}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="publication-empty">本次记录没有逐题门禁结果。</p>
-                      )}
-                      <div className="publication-actions">
+                    <small>{documentCategory(document)} · {document.source_uri || "未填写来源"}</small>
+                  </td>
+                  <td>
+                    <span className="knowledge-answer-preview">{document.raw_text || "未填写答案"}</span>
+                  </td>
+                  <td>{document.status === "active" ? "已启用" : document.status === "draft" ? "已停用" : "已删除"}</td>
+                  <td>{formatDateTime(document.created_at)}</td>
+                  <td>
+                    <div className="knowledge-row-actions">
+                      <button
+                        type="button"
+                        className="knowledge-link-button"
+                        onClick={() => editKnowledgeDocument(document)}
+                        disabled={!hasToken || !canImport || isLoading}
+                      >
+                        编辑
+                      </button>
+                      {document.status !== "active" ? (
                         <button
                           type="button"
-                          className="ghost-action danger-action"
-                          disabled={!hasToken || !canImport || isLoading || !hasPublishedRecord || document.status !== "active"}
-                          title={
-                            !hasToken
-                              ? "请先登录本地账号后再回滚知识。"
-                              : !canImport
-                                ? "当前账号没有知识库管理权限。"
-                                : isLoading
-                                  ? "正在同步知识库数据，请稍候。"
-                                  : !hasPublishedRecord
-                                    ? "该文档尚无发布记录，不能回滚。"
-                                    : document.status !== "active"
-                                      ? "只有已启用的知识文档才能回滚为草稿。"
-                                      : "回滚为草稿只暂停本地检索，不会恢复旧正文。"
-                          }
-                          aria-label="回滚为草稿：只暂停本地检索，不恢复旧正文"
-                          onClick={() => onRollbackDocument(document)}
+                          className="knowledge-link-button"
+                          onClick={() => requestDocumentStatusUpdate(document, "active")}
+                          disabled={!hasToken || !canImport || isLoading}
                         >
-                          <RefreshCw size={16} />
-                          回滚为草稿
+                          启用
                         </button>
-                        <span>
-                          回滚只暂停 active 检索，不恢复旧正文；完整版本 diff 属于下一阶段。
-                        </span>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="publication-empty">尚无发布门禁记录；草稿发布前会自动生成审计记录。</p>
-                  )}
-                </div>
-                <div className="knowledge-document-publish-actions" data-h2w2-document-publish-actions="true">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    data-h2w2-action="publish-precheck"
-                    disabled={!hasToken || !canImport || isLoading || document.ingestion_status !== "indexed"}
-                    onClick={() => onCheckPublishDocument(document)}
-                    title={document.ingestion_status !== "indexed" ? "文档完成索引后才能试跑样题" : "调用发布前门禁并写入检查记录"}
-                  >
-                    <Search size={16} />
-                    发布前样题试跑
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-action"
-                    data-h2w2-action="publish-document"
-                    disabled={!hasToken || !canImport || isLoading || document.status !== "draft" || document.ingestion_status !== "indexed"}
-                    onClick={() => onPublishDocument(document)}
-                    title={document.status === "active" ? "这份知识已经启用" : "发布通过后进入本地 active 检索范围"}
-                  >
-                    <CheckCircle2 size={16} />
-                    {document.status === "active" ? "已启用" : "确认发布版本"}
-                  </button>
-                  <span>发布只更新本地知识库和版本记录；真实渠道外发继续关闭。</span>
-                </div>
-                {chunks.slice(0, 2).map((chunk) => (
-                  <p key={chunk.id} className="knowledge-chunk-preview">
-                    片段 {chunk.chunk_index}：{chunk.content.slice(0, 120)}
-                    {chunk.content.length > 120 ? "..." : ""}
-                  </p>
-                ))}
-              </article>
-            );
-          })}
-          <PaginationControls result={pagedDocuments} view={listView} onChange={onListViewChange} />
+                      ) : (
+                        <button
+                          type="button"
+                          className="knowledge-link-button"
+                          onClick={() => requestDocumentStatusUpdate(document, "draft")}
+                          disabled={!hasToken || !canImport || isLoading}
+                        >
+                          停用
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="knowledge-link-button danger"
+                        onClick={() => requestDocumentDelete(document)}
+                        disabled={!hasToken || !canImport || isLoading}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {pagedDocuments.items.length === 0 ? (
+            <div className="knowledge-empty-table">
+              <FileText size={36} />
+              <span>暂无数据</span>
+            </div>
+          ) : null}
+
+          <div className="knowledge-table-footer">
+            <span>
+              共 {pagedDocuments.total} 条，当前 {pagedDocuments.start}-{pagedDocuments.end}
+            </span>
+            <PaginationControls result={pagedDocuments} view={listView} onChange={onListViewChange} />
+          </div>
+
         </div>
       </div>
-
-      <div className="knowledge-search">
-        <div className="knowledge-section-title">
-          <Search size={18} />
-          <strong>文档片段检索</strong>
+      {operationToast ? (
+        <div className="knowledge-operation-toast">
+          <CheckCircle2 size={18} />
+          <span>操作成功</span>
         </div>
-        <div className="knowledge-search-controls">
-          <input
-            value={searchQuery}
-            onChange={(event) => onSearchQueryChange(event.target.value)}
-            placeholder="输入客户问题，检查召回片段和引用来源"
-            disabled={!hasToken || isLoading}
-          />
-          <button type="button" className="primary-action" onClick={onSearchDocuments} disabled={!hasToken || isLoading}>
-            <Search size={17} />
-            检索
-          </button>
+      ) : null}
+      {confirmAction ? (
+        <div className="knowledge-confirm-backdrop" role="presentation">
+          <div className="knowledge-confirm-modal" role="dialog" aria-modal="true" aria-label={confirmAction.title}>
+            <header>
+              <strong>{confirmAction.title}</strong>
+              <button type="button" aria-label="关闭" onClick={() => setConfirmAction(null)}>
+                ×
+              </button>
+            </header>
+            <div className="knowledge-confirm-body">{confirmAction.message}</div>
+            <footer>
+              <button
+                type="button"
+                className="primary-action compact"
+                onClick={() => {
+                  const action = confirmAction.onConfirm;
+                  setConfirmAction(null);
+                  action();
+                }}
+              >
+                {confirmAction.confirmLabel}
+              </button>
+              <button type="button" className="ghost-action compact" onClick={() => setConfirmAction(null)}>
+                取消
+              </button>
+            </footer>
+          </div>
         </div>
-        <DisabledReason show={Boolean(searchDisabledReason)} reason={searchDisabledReason} />
+      ) : null}
+      {knowledgeEditorMode ? (
+        <div className="knowledge-modal-backdrop" role="presentation">
+          <div
+            className="knowledge-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={knowledgeEditorMode === "single" ? (draft.editingId ? "编辑问题" : "添加问题") : "导入资料"}
+          >
+            {knowledgeEditorMode === "single" ? (
+              <form
+                className="knowledge-inline-editor knowledge-modal-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onImportDocument();
+                }}
+              >
+                <header className="knowledge-modal-head">
+                  <strong>{draft.editingId ? "编辑问题" : "添加问题"}</strong>
+                  <button
+                    type="button"
+                    className="knowledge-link-button"
+                    onClick={() => {
+                      onDraftChange({ editingId: null, category: "", title: "", sourceUri: "", tags: "", rawText: "" });
+                      setKnowledgeEditorMode(null);
+                    }}
+                  >
+                    关闭
+                  </button>
+                </header>
+                <label>
+                  <span>问题</span>
+                  <input
+                    data-knowledge-field="document-title"
+                    value={draft.title}
+                    onChange={(event) => onDraftChange({ ...draft, title: event.target.value })}
+                    placeholder="请输入客户可能会问的问题"
+                    disabled={!hasToken || isLoading}
+                  />
+                </label>
+                <label>
+                  <span>答案</span>
+                  <textarea
+                    data-knowledge-field="document-raw-text"
+                    value={draft.rawText}
+                    onChange={(event) => onDraftChange({ ...draft, rawText: event.target.value })}
+                    placeholder="请输入机器人应该回复的标准答案"
+                    disabled={!hasToken || isLoading}
+                    rows={7}
+                  />
+                </label>
+                <label>
+                  <span>问题分类</span>
+                  <select
+                    data-knowledge-field="document-category"
+                    value={draft.category}
+                    onChange={(event) => onDraftChange({ ...draft, category: event.target.value })}
+                    disabled={!hasToken || isLoading}
+                  >
+                    <option value="">未分类</option>
+                    {knowledgeCategories
+                      .filter((category) => category.category !== "all" && category.category !== "未分类")
+                      .map((category) => (
+                        <option key={category.category} value={category.category}>
+                          {category.label}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <div className="knowledge-inline-actions">
+                  <button type="submit" className="primary-action compact" disabled={!hasToken || !canImport || isLoading}>
+                    {draft.editingId ? "保存编辑" : "保存"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-action compact"
+                    onClick={() => {
+                      onDraftChange({ editingId: null, category: "", title: "", sourceUri: "", tags: "", rawText: "" });
+                      setKnowledgeEditorMode(null);
+                    }}
+                  >
+                    取消
+                  </button>
+                </div>
+                <DisabledReason show={Boolean(importDisabledReason)} reason={importDisabledReason} />
+              </form>
+            ) : (
+              <section className="knowledge-inline-editor knowledge-modal-form">
+                <header className="knowledge-modal-head">
+                  <strong>导入资料</strong>
+                  <button type="button" className="knowledge-link-button" onClick={() => setKnowledgeEditorMode(null)}>
+                    关闭
+                  </button>
+                </header>
+                <div className="knowledge-import-template-box">
+                  <strong>Excel 模板包含三列：问题分类、问题、答案。</strong>
+                  <span>先下载模板，填写后上传 .xls 或 .xlsx 文件；问题分类为空会导入到未分类。</span>
+                </div>
+                <input
+                  ref={knowledgeWorkbookInputRef}
+                  type="file"
+                  accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      onImportQuestionWorkbook(file);
+                    }
+                    event.target.value = "";
+                  }}
+                />
+                <div className="knowledge-inline-actions">
+                  <button type="button" className="ghost-action compact" onClick={downloadQuestionImportTemplate}>
+                    下载模板
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-action compact"
+                    onClick={() => knowledgeWorkbookInputRef.current?.click()}
+                    disabled={!hasToken || !canImport || templateImportDraft.status === "loading"}
+                  >
+                    选择文件导入
+                  </button>
+                  <span>支持 .xls / .xlsx</span>
+                </div>
+                <PanelStateNotice status={templateImportDraft.status} message={templateImportDraft.message} loadingMessage="正在导入 Excel。" compact />
+              </section>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
 
-        {searchResult ? (
-          <div className="knowledge-search-results">
-            <div className="retrieval-summary">
-              <span>{searchResult.retrieval_mode}</span>
-              <span>{searchResult.vector_engine}</span>
-              <span>候选 {searchResult.total_candidates}</span>
+
+}
+
+function KnowledgeRecallPanel({
+  state,
+  searchQuery,
+  hasToken,
+  onSearchQueryChange,
+  onSearchDocuments,
+  onRefresh
+}: {
+  state: KnowledgeWorkbenchState;
+  searchQuery: string;
+  hasToken: boolean;
+  onSearchQueryChange: (query: string) => void;
+  onSearchDocuments: (category?: string) => void;
+  onRefresh: () => void;
+}) {
+  const isLoading = state.status === "loading";
+  const searchResult = state.searchResult;
+  const documentCategory = (document: KnowledgeDocument) =>
+    document.category ||
+    document.tags
+      .find((tag) => tag.startsWith("分类:"))
+      ?.replace(/^分类:/, "")
+      .trim() ||
+    "未分类";
+  const [activeKnowledgeCategory, setActiveKnowledgeCategory] = useState("all");
+  const knowledgeCategories = [
+    { label: "全部问题", category: "all", count: state.documents.filter((document) => document.status !== "archived").length },
+    ...Array.from(
+      state.documents
+        .filter((document) => document.status !== "archived")
+        .reduce((map, document) => {
+          const category = documentCategory(document);
+          map.set(category, (map.get(category) ?? 0) + 1);
+          return map;
+        }, new Map<string, number>())
+    )
+      .sort(([first], [second]) => first.localeCompare(second, "zh-Hans-CN"))
+      .map(([label, count]) => ({ label, category: label, count }))
+  ];
+  const activeCategoryLabel =
+    knowledgeCategories.find((category) => category.category === activeKnowledgeCategory)?.label ?? "全部问题";
+  return (
+    <section className="knowledge-console" id="workspace-knowledge-recall" aria-label="机器人测试召回">
+      <header className="knowledge-console-topbar">
+        <strong>测试召回</strong>
+        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading}>
+          <RefreshCw size={15} />
+          {isLoading ? "刷新中" : "刷新"}
+        </button>
+      </header>
+      <div className="knowledge-console-body">
+        <aside className="knowledge-category-pane" aria-label="召回问题分类">
+          <div className="knowledge-category-head">
+            <strong>问题分类</strong>
+          </div>
+          {knowledgeCategories.map((category) => (
+            <button
+              key={category.category}
+              type="button"
+              className={activeKnowledgeCategory === category.category ? "active" : ""}
+              onClick={() => setActiveKnowledgeCategory(category.category)}
+            >
+              <span>{category.label}</span>
+              <small>{category.count}</small>
+            </button>
+          ))}
+        </aside>
+        <div className="knowledge-table-pane">
+          <div className="knowledge-recall-panel">
+            <div className="knowledge-recall-head">
+              <strong>客户问题</strong>
+              <span>当前范围：{activeCategoryLabel}</span>
             </div>
-            {searchResult.matches.length === 0 ? (
-              <WorkspaceStateNotice
-                kind="empty"
-                message="没有命中文档片段，应进入知识缺口复盘，补充标准答案、适用问题和引用来源。"
-                compact
+            <div className="knowledge-test-strip standalone">
+              <input
+                value={searchQuery}
+                onChange={(event) => onSearchQueryChange(event.target.value)}
+                placeholder="输入客户问题，测试机器人召回"
+                disabled={!hasToken || isLoading}
               />
-            ) : null}
-            {searchResult.matches.map((match) => (
-              <article key={`${match.document_id}-${match.chunk_id}`} className="knowledge-search-row">
-                <div className="knowledge-document-head">
-                  <div>
-                    <strong>{match.document_title}</strong>
+              <button
+                type="button"
+                className="primary-action compact"
+                onClick={() => onSearchDocuments(activeKnowledgeCategory === "all" ? "" : activeKnowledgeCategory)}
+                disabled={!hasToken || isLoading}
+              >
+                <Search size={15} />
+                检索
+              </button>
+              {searchResult ? <span>命中 {searchResult.matches.length} 条</span> : null}
+            </div>
+            {searchResult ? (
+              searchResult.matches.length > 0 ? (
+                <div className="knowledge-test-results recall-results">
+                  {searchResult.matches.map((match) => (
+                    <article key={`${match.document_id}-${match.chunk_id}`}>
+                      <strong>{match.document_title}</strong>
+                      <span>片段 {match.chunk_index} · 置信度 {formatPercent(match.confidence)} · 综合分 {match.score.toFixed(2)}</span>
+                      <p>{match.content_preview}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="knowledge-empty-table compact">
+                  <FileText size={32} />
+                  <span>没有命中结果</span>
+                </div>
+              )
+            ) : (
+              <div className="knowledge-empty-table compact">
+                <Search size={32} />
+                <span>输入客户问题后开始测试</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function KnowledgeQATestPanel({
+  state,
+  searchQuery,
+  hasToken,
+  onSearchQueryChange,
+  onSearchDocuments,
+  onRefresh
+}: {
+  state: KnowledgeWorkbenchState;
+  searchQuery: string;
+  hasToken: boolean;
+  onSearchQueryChange: (query: string) => void;
+  onSearchDocuments: (category?: string) => void;
+  onRefresh: () => void;
+}) {
+  const isLoading = state.status === "loading";
+  const searchResult = state.searchResult;
+  return (
+    <section className="knowledge-console" id="workspace-knowledge-qa-test" aria-label="机器人问答测试">
+      <header className="knowledge-console-topbar">
+        <strong>问答测试</strong>
+        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading}>
+          <RefreshCw size={15} />
+          {isLoading ? "刷新中" : "刷新"}
+        </button>
+      </header>
+      <div className="knowledge-console-body knowledge-console-body-single">
+        <div className="knowledge-table-pane">
+          <div className="knowledge-recall-panel">
+            <div className="knowledge-recall-head">
+              <strong>客户问题</strong>
+            </div>
+            <div className="knowledge-test-strip standalone">
+              <input
+                value={searchQuery}
+                onChange={(event) => onSearchQueryChange(event.target.value)}
+                placeholder="输入客户问题，测试最终回答"
+                disabled={!hasToken || isLoading}
+              />
+              <button
+                type="button"
+                className="primary-action compact"
+                onClick={() => onSearchDocuments("")}
+                disabled={!hasToken || isLoading}
+              >
+                <Search size={15} />
+                生成回答
+              </button>
+              {searchResult ? <span>引用 {searchResult.final_answer_citations.length} 条</span> : null}
+            </div>
+            {searchResult ? (
+              searchResult.matches.length > 0 ? (
+                <>
+                  <div className="knowledge-final-answer">
+                    <strong>最终回答</strong>
+                    <p>{searchResult.final_answer || "已命中知识，但最终回答生成失败，请人工根据引用内容确认后回复。"}</p>
                     <span>
-                      片段 {match.chunk_index} · 置信度 {formatPercent(match.confidence)} · 综合分{" "}
-                      {match.score.toFixed(2)}
+                      {searchResult.final_answer_status === "generated" ? "模型生成" : "知识片段兜底"}
+                      {searchResult.final_answer_citations.length > 0 ? ` · 引用 ${searchResult.final_answer_citations.length} 条` : ""}
                     </span>
                   </div>
-                  <small>BM25 {match.bm25_score.toFixed(2)} · 向量占位 {match.vector_score.toFixed(2)}</small>
-                </div>
-                <p>{match.content_preview}</p>
-                <p className="citation-line">引用来源：{formatCitation(match.citation)}</p>
-                {match.matched_terms.length > 0 ? (
-                  <div className="evidence-strip">
-                    {match.matched_terms.slice(0, 8).map((term) => (
-                      <span key={term}>{term}</span>
+                  <div className="knowledge-test-results recall-results">
+                    {searchResult.matches.map((match) => (
+                      <article key={`${match.document_id}-${match.chunk_id}`}>
+                        <strong>{match.document_title}</strong>
+                        <span>片段 {match.chunk_index} · 置信度 {formatPercent(match.confidence)}</span>
+                        <p>{match.content_preview}</p>
+                      </article>
                     ))}
                   </div>
-                ) : null}
+                </>
+              ) : (
+                <div className="knowledge-empty-table compact">
+                  <FileText size={32} />
+                  <span>{searchResult.knowledge_gap_required ? "没有命中知识，不生成最终回答" : "没有生成最终回答"}</span>
+                </div>
+              )
+            ) : (
+              <div className="knowledge-empty-table compact">
+                <Search size={32} />
+                <span>输入客户问题后生成最终回答</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BotModelServicePanel({
+  state,
+  hasToken,
+  canManage,
+  onRefresh,
+  onSaveApiKey,
+  onClearApiKey,
+  onProbe
+}: {
+  state: ModelServiceState;
+  hasToken: boolean;
+  canManage: boolean;
+  onRefresh: () => void;
+  onSaveApiKey: (apiKey: string) => void;
+  onClearApiKey: () => void;
+  onProbe: () => void;
+}) {
+  const [apiKey, setApiKey] = useState("");
+  const isLoading = state.status === "loading";
+  const provider = state.config?.provider;
+  const models = [
+    {
+      label: "嵌入模型",
+      value: provider?.embedding_model ?? "BAAI/bge-large-zh-v1.5",
+      note: "用于知识切片向量化和客户问题向量化。"
+    },
+    {
+      label: "重排序模型",
+      value: provider?.reranker_model ?? "BAAI/bge-reranker-v2-m3",
+      note: "用于对初召回结果重新排序。"
+    },
+    {
+      label: "智能问答模型",
+      value: provider?.llm_model ?? "Qwen/Qwen3.5-4B",
+      note: "用于根据命中知识生成客服回复。"
+    }
+  ];
+  return (
+    <section className="knowledge-console" id="workspace-bot-model-service" aria-label="机器人模型服务">
+      <header className="knowledge-console-topbar">
+        <strong>模型服务</strong>
+        <button type="button" className="knowledge-link-button" onClick={onRefresh} disabled={!hasToken || isLoading}>
+          <RefreshCw size={15} />
+          {isLoading ? "刷新中" : "刷新"}
+        </button>
+      </header>
+      <div className="bot-model-service-layout">
+        <section className="bot-model-service-main">
+          <div className="bot-model-service-head">
+            <div>
+              <strong>硅基流动</strong>
+              <span>{provider?.base_url ?? "https://api.siliconflow.cn/v1"}</span>
+            </div>
+            <span className={provider?.api_key_configured ? "status-pill success" : "status-pill warning"}>
+              {provider?.api_key_configured ? "已配置" : "未配置"}
+            </span>
+          </div>
+          <div className="bot-model-grid">
+            {models.map((item) => (
+              <article key={item.label} className="bot-model-row">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <small>{item.note}</small>
               </article>
             ))}
           </div>
-        ) : (
-          <WorkspaceStateNotice
-            kind={hasToken ? "info" : "demo"}
-            title={hasToken ? "状态说明" : PREVIEW_DATA_LABEL}
-            message="尚未运行文档检索；当前引擎是 deterministic_local_hash_embedding_v1 + lexical_overlap_reranker_v1，不代表生产向量库。"
-            compact
-          />
-        )}
+          <PanelStateNotice status={state.status} message={state.message} loadingMessage="正在处理模型服务配置。" compact />
+          {state.probe ? (
+            <div className="bot-model-probe-list">
+              {state.probe.results.map((item) => (
+                <article key={item.name} className={item.status === "succeeded" ? "is-ok" : "is-error"}>
+                  <strong>{item.name}</strong>
+                  <span>{item.model}</span>
+                  <small>{item.status === "succeeded" ? `${item.latency_ms}ms` : item.error_message}</small>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </section>
+        <aside className="bot-model-service-side">
+          <label>
+            <span>SiliconFlow API Key</span>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder={provider?.api_key_masked || "粘贴硅基流动 API Key"}
+              disabled={!hasToken || !canManage || isLoading}
+            />
+          </label>
+          <div className="bot-model-current-key">
+            <span>当前密钥</span>
+            <strong>{provider?.api_key_configured ? provider.api_key_masked || "已配置" : "未配置"}</strong>
+          </div>
+          <div className="bot-model-actions">
+            <button
+              type="button"
+              className="primary-action compact"
+              onClick={() => {
+                onSaveApiKey(apiKey);
+                setApiKey("");
+              }}
+              disabled={!hasToken || !canManage || isLoading || !apiKey.trim()}
+            >
+              <KeyRound size={15} />
+              保存
+            </button>
+            <button
+              type="button"
+              className="ghost-action compact"
+              onClick={onProbe}
+              disabled={!hasToken || !canManage || isLoading || !provider?.api_key_configured}
+            >
+              测试
+            </button>
+            <button
+              type="button"
+              className="ghost-action compact"
+              onClick={onClearApiKey}
+              disabled={!hasToken || !canManage || isLoading || !provider?.api_key_configured}
+            >
+              清除
+            </button>
+          </div>
+        </aside>
       </div>
     </section>
   );
@@ -13909,7 +13868,7 @@ function PilotPreparationPanel({
       title: "知识资料",
       status: "pending",
       summary: "等待知识库资料导入。",
-      next_action: "进入知识库运营导入业务资料。",
+      next_action: "进入资料库导入业务资料。",
       target_href: "#knowledge",
       blockers: [],
       evidence: []
@@ -13990,7 +13949,7 @@ function PilotPreparationPanel({
     {
       label: "影子试跑",
       status: readiness?.shadow_trial_status ?? "not_checked",
-      detail: "真实外发关闭，只生成草稿、建议和质量报告。"
+      detail: "外部发送受控，只生成草稿、建议和质量报告。"
     },
     {
       label: "前端验收",
@@ -14217,7 +14176,7 @@ function PilotPreparationPanel({
           <ul>
             <li>知识资料 CSV：产品、服务、流程政策、禁用承诺、转人工规则。</li>
             <li>试跑问题 CSV：50-100 条脱敏客户问题和期望动作。</li>
-            <li>资料说明 JSON：提供人角色、脱敏声明、真实外发关闭确认。</li>
+            <li>资料说明 JSON：提供人角色、脱敏声明、外部发送受控确认。</li>
           </ul>
         </div>
         <div className="pilot-five-gap-grid" aria-label="五大缺口完成状态">
@@ -14493,7 +14452,7 @@ function PilotPreparationPanel({
                 <p className="pilot-result-copy">{materialPrecheckResult.summary}</p>
               )}
               <small className="pilot-boundary-note">
-                原始资料未保存；真实外发关闭；正式确认仍需客户回填确认表。
+                原始资料未保存；外部发送受控；正式确认仍需客户回填确认表。
               </small>
             </>
           ) : (
@@ -16089,7 +16048,7 @@ function OpsWorkerHealthPanel({
           />
           <DataSourceBadge
             mode="off"
-            label="真实外发关闭"
+            label="外部发送受控"
             detail="运维页只读查看，不触发模型调用或外部平台写入"
           />
         </div>
@@ -16504,7 +16463,7 @@ function ReviewInboxPanel({
         />
         <DataSourceBadge
           mode="off"
-          label="真实外发关闭"
+          label="外部发送受控"
           detail="批准只进入待发送门禁，不自动真实外发"
         />
       </div>
@@ -16756,7 +16715,7 @@ function OutboxPanel({
         />
         <DataSourceBadge
           mode="off"
-          label="真实外发关闭"
+          label="外部发送受控"
           detail="当前只生成发送计划、本地演练和队列记录，不自动真实外发"
         />
       </div>
@@ -17020,7 +16979,7 @@ function FailureReviewPanel({
         />
         <DataSourceBadge
           mode="off"
-          label="真实外发关闭"
+          label="外部发送受控"
           detail="复盘动作只关闭内部待办，不自动重发平台消息"
         />
       </div>
@@ -17207,7 +17166,7 @@ function formatPriorityLabel(value: string) {
 
 function conversationActionNote(action: ConversationWorkflowActionName) {
   const notes: Record<ConversationWorkflowActionName, string> = {
-    claim: "坐席领取会话",
+    claim: "坐席接起会话",
     release: "坐席释放会话回公共池",
     transfer: "坐席转派会话",
     close: "坐席关闭对话",
@@ -17384,18 +17343,18 @@ function canClaimConversation(
   if (!hasToken || isLoading || !currentUserId || Number.isNaN(currentUserId)) {
     return false;
   }
-  if (item.status === "resolved") {
+  if (item.status === "resolved" || item.status === "closed") {
     return true;
   }
   return item.assigned_user_id === null || item.assigned_user_id === currentUserId;
 }
 
 function canWorkConversation(item: ConversationInboxItem, hasToken: boolean, isLoading: boolean) {
-  return hasToken && !isLoading && item.status !== "resolved";
+  return hasToken && !isLoading && !["resolved", "closed"].includes(item.status);
 }
 
 function canReleaseConversation(item: ConversationInboxItem, hasToken: boolean, isLoading: boolean) {
-  return hasToken && !isLoading && item.assigned_user_id !== null && item.status !== "resolved";
+  return hasToken && !isLoading && item.assigned_user_id !== null && !["resolved", "closed"].includes(item.status);
 }
 
 function parseEvaluationCases(text: string) {
@@ -19791,7 +19750,7 @@ function createDemoWorkspace() {
     quality_conclusion: "本地样本已具备题库、回执和知识缺口的复盘口径，但仍缺真实客户题库、最终回复事实性标签和官方渠道回执。",
     executive_summary: [
       "当前只展示受控试点质量结构，不代表完整线上客服准确率。",
-      "知识缺口已能回到知识库运营和自动回复策略。",
+      "知识缺口已能回到资料库和自动回复策略。",
       "报告导出和客户确认只做本地归档，不是正式电子签章。"
     ],
     headline_metrics: [
@@ -20017,6 +19976,11 @@ function createDemoWorkspace() {
       embedding_model: "local_hash",
       reranker: "lexical_overlap_reranker_v1",
       total_candidates: 5,
+      final_answer: "根据当前样例知识，试点部署会先使用已启用知识库生成回复；没有命中资料时不自动编答案，会转入人工处理和知识缺口。",
+      final_answer_status: "generated",
+      final_answer_source: "demo_fixture",
+      final_answer_citations: [],
+      knowledge_gap_required: false,
       matches: knowledgeDocuments.slice(0, 5).map((document, index) => ({
         chunk_id: chunksByDocument[document.id][0].id,
         document_id: document.id,
@@ -20149,7 +20113,7 @@ function LoginScreen({
   const [ownerName, setOwnerName] = useState("负责人");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const canCreateFirstOwner = setupStatus?.can_create_first_owner ?? true;
+  const canCreateFirstOwner = setupStatus?.can_create_first_owner === true;
   const isInitialized = setupStatus?.initialized ?? false;
   const canUseLocalPreview = Boolean(setupStatus?.dev_bootstrap_enabled && !canCreateFirstOwner);
   const readinessItems = setupStatus

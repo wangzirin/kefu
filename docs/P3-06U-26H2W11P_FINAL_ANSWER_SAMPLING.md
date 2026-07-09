@@ -26,9 +26,9 @@
 
 ## 输出
 
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11o_and_11p_accept_rea0/h2w11p/final_answer_samples_redacted.csv`
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11o_and_11p_accept_rea0/h2w11p/final_answer_human_factuality_labels.csv`
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11o_and_11p_accept_rea0/h2w11p/summary.json`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11o_and_11p_accept_rea0\h2w11p\final_answer_samples_redacted.csv`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11o_and_11p_accept_rea0\h2w11p\final_answer_human_factuality_labels.csv`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11o_and_11p_accept_rea0\h2w11p\summary.json`
 
 ## 边界
 

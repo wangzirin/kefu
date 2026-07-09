@@ -3,7 +3,7 @@
 ## 结论
 
 - 阶段状态：`waiting_for_customer_return`
-- 客户回传文件：`/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11n_waits_for_real_cus0/missing_customer_return.csv`
+- 客户回传文件：`C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11n_waits_for_real_cus0\missing_customer_return.csv`
 - 回传文件存在：`false`
 - 客户确认条目：`0`
 - 内部演练确认条目：`0`
@@ -22,13 +22,13 @@
 
 ## 当前阻断项
 
-- 真实客户确认回传文件不存在：/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11n_waits_for_real_cus0/missing_customer_return.csv；不得标记客户确认完成
+- 真实客户确认回传文件不存在：C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11n_waits_for_real_cus0\missing_customer_return.csv；不得标记客户确认完成
 
 ## 输出
 
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11n_waits_for_real_cus0/summary.json`
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11n_waits_for_real_cus0/customer_revision_items.csv`
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-505/test_h2w11n_waits_for_real_cus0/customer_rejected_items.csv`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11n_waits_for_real_cus0\summary.json`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11n_waits_for_real_cus0\customer_revision_items.csv`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_h2w11n_waits_for_real_cus0\customer_rejected_items.csv`
 
 ## 边界
 

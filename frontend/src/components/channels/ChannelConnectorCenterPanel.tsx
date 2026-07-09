@@ -865,7 +865,7 @@ export function ChannelConnectorCenterPanel({
       {
         id: `system-close-${now.getTime()}`,
         role: "system",
-        text: "客服已关闭对话",
+        text: "客服已关闭对话，本次咨询已结束。",
         time: now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
       }
     ]);
@@ -2718,12 +2718,13 @@ function normalizeChannelEntryId(value: string | undefined): ChannelEntryId {
 function buildCustomerAccessSnippet(entry: ChannelEntryDefinition, component?: ChannelAccessComponent, tenantId?: string | number) {
   const componentId = component?.id ?? "customer-entry";
   if (entry.id === "website") {
+    const widgetBase = "http://127.0.0.1:8000";
     return `<script type="text/javascript">
   window._WANFA = window._WANFA || function () { (_WANFA.a = _WANFA.a || []).push(arguments); };
   _WANFA("cptid", "${componentId}");
   _WANFA("tenantId", "${tenantId ?? 1}");
-  _WANFA("domain", "web.zixunkefu.net");
-  _WANFA("apiBase", "https://web.zixunkefu.net");
+  _WANFA("domain", "127.0.0.1:8000");
+  _WANFA("apiBase", "${widgetBase}");
   _WANFA("channel", "website");
   _WANFA("mode", "${component?.style === "link" ? "link" : "widget"}");
   _WANFA("position", "${component?.position || "right-bottom"}");
@@ -2732,7 +2733,7 @@ function buildCustomerAccessSnippet(entry: ChannelEntryDefinition, component?: C
     j = d.createElement(q), s = d.getElementsByTagName(q)[0];
     j.async = true;
     j.charset = "UTF-8";
-    j.src = ("https:" == document.location.protocol ? "https://" : "http://") + "web.zixunkefu.net/Web/js/customer-widget.js?_=t";
+    j.src = "${widgetBase}/Web/js/customer-widget.js?_=t";
     s.parentNode.insertBefore(j, s);
   })(window, document, "script");
 </script>`;
@@ -2781,11 +2782,11 @@ const CHANNEL_ROLE_RESPONSIBILITIES: ChannelRoleResponsibility[] = [
     role: "负责人",
     purpose: "确认试跑范围、渠道优先级和外发边界",
     configOwner: "通常由老板、运营负责人或项目负责人担任",
-    requiredBeforeTrial: "必须确认真实外发关闭、客户资料已脱敏、试跑结果不作为正式签收"
+    requiredBeforeTrial: "必须确认外部发送受控、客户资料已脱敏、试跑结果不作为正式签收"
   },
   {
     role: "接待人员",
-    purpose: "处理转人工会话和客户追问",
+    purpose: "处理人工接待和客户追问",
     configOwner: "可按门店、店铺、客服小组或班次配置",
     requiredBeforeTrial: "必须知道哪些情况要接管，以及接管后如何记录处理结果"
   },

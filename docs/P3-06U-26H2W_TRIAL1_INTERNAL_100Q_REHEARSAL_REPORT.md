@@ -27,5 +27,5 @@
 
 ## 输出
 
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-628/test_trial1_marks_internal_rep0/out/summary.json`
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-628/test_trial1_marks_internal_rep0/out/internal_trial_report.md`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_trial1_marks_internal_rep0\out\summary.json`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_trial1_marks_internal_rep0\out\internal_trial_report.md`

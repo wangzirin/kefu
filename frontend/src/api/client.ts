@@ -39,6 +39,43 @@ export interface CurrentUser {
   personal_settings: UserPersonalSettings;
 }
 
+export interface ModelServiceProvider {
+  key: string;
+  label: string;
+  base_url: string;
+  api_key_configured: boolean;
+  api_key_masked: string;
+  api_key_source: string;
+  embedding_model: string;
+  reranker_model: string;
+  llm_model: string;
+  secret_included: boolean;
+}
+
+export interface ModelServiceConfig {
+  tenant_id: number;
+  provider: ModelServiceProvider;
+  generated_at: string;
+}
+
+export interface ModelServiceProbeResult {
+  name: string;
+  model: string;
+  endpoint: string;
+  status: string;
+  latency_ms: number;
+  error_message: string;
+}
+
+export interface ModelServiceProbe {
+  tenant_id: number;
+  provider: string;
+  status: string;
+  results: ModelServiceProbeResult[];
+  generated_at: string;
+  secret_included: boolean;
+}
+
 export interface LoginRequest {
   tenant_slug: string;
   email: string;
@@ -950,7 +987,7 @@ export interface OpsAlertRunbook {
 export interface OpsAlertRule {
   code: string;
   name: string;
-  category: string;
+  category?: string;
   severity: string;
   response_type: string;
   status: string;
@@ -1238,6 +1275,8 @@ export interface KnowledgeDocument {
   title: string;
   source_type: string;
   source_uri: string;
+  category?: string;
+  raw_text?: string;
   content_hash: string;
   tags: string[];
   status: string;
@@ -1366,6 +1405,11 @@ export interface KnowledgeDocumentSearchResponse {
   reranker: string;
   total_candidates: number;
   matches: KnowledgeDocumentSearchMatch[];
+  final_answer: string;
+  final_answer_status: string;
+  final_answer_source: string;
+  final_answer_citations: Array<Record<string, unknown>>;
+  knowledge_gap_required: boolean;
 }
 
 export interface KnowledgeMeshNode {
@@ -3706,6 +3750,45 @@ export async function getAiServiceStatus(tenantId: string | number, token: strin
   return requestJson<AiServiceStatus>(`/api/tenants/${tenantId}/ai-service-status`, {}, token);
 }
 
+export async function getModelServiceConfig(tenantId: string | number, token: string): Promise<ModelServiceConfig> {
+  return requestJson<ModelServiceConfig>(`/api/tenants/${tenantId}/model-service`, {}, token);
+}
+
+export async function updateModelServiceConfig(
+  tenantId: string | number,
+  token: string,
+  payload: { api_key: string }
+): Promise<ModelServiceConfig> {
+  return requestJson<ModelServiceConfig>(
+    `/api/tenants/${tenantId}/model-service`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    },
+    token
+  );
+}
+
+export async function clearModelServiceConfig(tenantId: string | number, token: string): Promise<ModelServiceConfig> {
+  return requestJson<ModelServiceConfig>(
+    `/api/tenants/${tenantId}/model-service`,
+    {
+      method: "DELETE"
+    },
+    token
+  );
+}
+
+export async function probeModelService(tenantId: string | number, token: string): Promise<ModelServiceProbe> {
+  return requestJson<ModelServiceProbe>(
+    `/api/tenants/${tenantId}/model-service/probe`,
+    {
+      method: "POST"
+    },
+    token
+  );
+}
+
 export async function precheckKnowledgeImport(
   tenantId: string | number,
   token: string,
@@ -4040,13 +4123,10 @@ export async function updateSalesLead(
 export async function listKnowledgeDocuments(
   tenantId: string | number,
   token: string,
-  status = "active"
+  status = "all"
 ): Promise<KnowledgeDocumentList> {
-  return requestJson<KnowledgeDocumentList>(
-    `/api/tenants/${tenantId}/knowledge-documents?status=${encodeURIComponent(status)}`,
-    {},
-    token
-  );
+  const query = status === "all" ? "" : `?status=${encodeURIComponent(status)}`;
+  return requestJson<KnowledgeDocumentList>(`/api/tenants/${tenantId}/knowledge-documents${query}`, {}, token);
 }
 
 export async function getKnowledgeMemoryMeshOverview(
@@ -4067,6 +4147,7 @@ export async function createKnowledgeDocument(
     title: string;
     source_type?: string;
     source_uri?: string;
+    category?: string;
     raw_text: string;
     tags?: string[];
     status?: "draft" | "active" | "archived";
@@ -4087,6 +4168,38 @@ export async function createKnowledgeDocument(
         chunk_overlap: 120,
         ...payload
       })
+    },
+    token
+  );
+}
+
+export async function updateKnowledgeDocument(
+  documentId: number,
+  token: string,
+  payload: {
+    title?: string;
+    source_uri?: string;
+    raw_text?: string;
+    tags?: string[];
+    status?: "draft" | "active" | "archived";
+    category?: string;
+  }
+): Promise<KnowledgeDocument> {
+  return requestJson<KnowledgeDocument>(
+    `/api/knowledge-documents/${documentId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    },
+    token
+  );
+}
+
+export async function deleteKnowledgeDocument(documentId: number, token: string): Promise<KnowledgeDocument> {
+  return requestJson<KnowledgeDocument>(
+    `/api/knowledge-documents/${documentId}`,
+    {
+      method: "DELETE"
     },
     token
   );
@@ -4179,7 +4292,7 @@ export async function rollbackKnowledgeDocumentPublication(
 export async function searchKnowledgeDocuments(
   tenantId: string | number,
   token: string,
-  payload: { query: string; top_k?: number; status?: "draft" | "active" | "archived"; min_score?: number }
+  payload: { query: string; top_k?: number; status?: "draft" | "active" | "archived"; min_score?: number; category?: string }
 ): Promise<KnowledgeDocumentSearchResponse> {
   return requestJson<KnowledgeDocumentSearchResponse>(
     `/api/tenants/${tenantId}/knowledge-document-searches`,

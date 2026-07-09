@@ -280,7 +280,7 @@ def configure_channel_connector(
     connector.webhook_path = payload.webhook_path
     connector.signature_mode = payload.signature_mode
     connector.secret_status = connector_secret_status(provider=payload.provider, public_config=sanitized_public_config)
-    connector.external_write_enabled = False
+    connector.external_write_enabled = bool(payload.external_write_enabled)
     connector.updated_by_id = principal.user.id
     connector.updated_at = now
     db.flush()
@@ -296,7 +296,7 @@ def configure_channel_connector(
             "provider": connector.provider,
             "mode": connector.mode,
             "status": connector.status,
-            "external_write_enabled": False,
+            "external_write_enabled": connector.external_write_enabled,
             "secret_status": connector.secret_status,
         },
     )
@@ -565,7 +565,7 @@ def verify_channel_connector_configuration(
         "status": status_value,
         "missing_fields": missing,
         "webhook_path": connector.webhook_path,
-        "external_write_enabled": False,
+        "external_write_enabled": connector.external_write_enabled,
         "secret_included": False,
     }
 

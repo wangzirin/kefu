@@ -1,7 +1,18 @@
+import pytest
+
 from test_knowledge_api import _bootstrap_user
 from test_knowledge_documents_api import DOCUMENT_TEXT
 
 from app.services.knowledge import _build_pgvector_candidate_sql
+
+
+@pytest.fixture(autouse=True)
+def _use_deterministic_json_vector_store(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_EMBEDDING_PROVIDER", "deterministic_local")
+    monkeypatch.setenv("KNOWLEDGE_EMBEDDING_MODEL", "deterministic-token-vector-v1")
+    monkeypatch.setenv("KNOWLEDGE_EMBEDDING_DIMENSIONS", "64")
+    monkeypatch.setenv("KNOWLEDGE_VECTOR_STORE", "sqlite_json_vector_store")
+    monkeypatch.setenv("KNOWLEDGE_RERANKER", "lexical_overlap_reranker_v1")
 
 
 def test_owner_can_rebuild_knowledge_vector_index(client) -> None:

@@ -165,6 +165,20 @@ def post_conversation_workflow_action(
     return apply_conversation_workflow_action(db, conversation_id, payload, principal)
 
 
+@router.post("/conversations/{conversation_id}/claim", response_model=ConversationRead)
+def claim_conversation(
+    conversation_id: int,
+    principal: CurrentPrincipal = Depends(require_permission(CONVERSATION_MANAGE_PERMISSION)),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    return apply_conversation_workflow_action(
+        db,
+        conversation_id,
+        ConversationWorkflowAction(action="claim"),
+        principal,
+    )
+
+
 @router.post(
     "/conversations/{conversation_id}/messages",
     response_model=MessageRead,

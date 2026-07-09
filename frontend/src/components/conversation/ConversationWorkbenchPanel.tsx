@@ -574,10 +574,19 @@ export function ConversationWorkbenchPanel({
     : [];
   const localReplyIsForSelected = localReplyState.conversationId === selectedConversation.id;
   const isSendingLocalReply = localReplyIsForSelected && localReplyState.status === "sending";
+  const isQueuedForCurrentAgent =
+    selectedConversation.status === "queued_for_me" &&
+    currentUserId !== null &&
+    selectedConversation.assigned_user_id === currentUserId;
+  const isClaimedByCurrentAgent =
+    currentUserId !== null &&
+    selectedConversation.assigned_user_id === currentUserId &&
+    ["assigned_to_me", "handoff", "follow_up", "waiting_customer"].includes(selectedConversation.status);
   const composerHasContent = editableDraft.trim().length > 0 || attachmentDrafts.length > 0 || ratingInvitePending;
   const canSendLocalReply =
     hasToken &&
     canManageConversations &&
+    isClaimedByCurrentAgent &&
     composerHasContent &&
     !isLoading &&
     !isSendingLocalReply;
@@ -686,6 +695,9 @@ export function ConversationWorkbenchPanel({
   const handleEndConversation = () => {
     onWorkflowAction(selectedConversation, "close", "坐席关闭当前对话，客户侧显示关闭提示。");
   };
+  const handleClaimConversation = () => {
+    onWorkflowAction(selectedConversation, "claim", "坐席手动接起当前会话。");
+  };
   const handleTransferConversation = () => {
     if (!selectedTransferColleague) {
       return;
@@ -789,6 +801,12 @@ export function ConversationWorkbenchPanel({
                   <span>{selectedChannelLabel} · {selectedStoreLabel}</span>
                 </div>
                 <div className="miduoke-chat-actions" aria-label="会话工具">
+                  {isQueuedForCurrentAgent ? (
+                    <button type="button" className="primary-action" title="接起会话" onClick={handleClaimConversation}>
+                      <MessageSquare size={18} />
+                      接起
+                    </button>
+                  ) : null}
                   <span className="miduoke-transfer-anchor">
                     <button type="button" title="转接同事" onClick={() => setIsTransferOpen((current) => !current)}>
                       <UserRound size={18} />
@@ -982,9 +1000,11 @@ export function ConversationWorkbenchPanel({
                   onChange={(event) => setEditableDraft(event.target.value)}
                   onKeyDown={handleComposerKeyDown}
                   aria-label="输入消息内容"
-                  placeholder={replyPlaceholder}
+                  placeholder={isQueuedForCurrentAgent ? "请先点击接起，再回复客户。" : replyPlaceholder}
+                  disabled={isQueuedForCurrentAgent}
                 />
                 <div className="miduoke-composer-foot">
+                  {isQueuedForCurrentAgent ? <span className="inline-notice">该会话已派发给你，接起后会进入“我的对话”。</span> : null}
                   <div>
                     {relatedReview ? (
                       <button

@@ -16,6 +16,7 @@ class ChannelConnectorConfigCreate(BaseModel):
     public_config: dict[str, Any] = Field(default_factory=dict)
     webhook_path: str = Field(default="", max_length=300)
     signature_mode: str = Field(default="not_configured", max_length=80)
+    external_write_enabled: bool = False
 
 
 class ChannelConnectorConfigRead(BaseModel):

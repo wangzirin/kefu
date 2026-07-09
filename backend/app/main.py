@@ -43,13 +43,15 @@ def create_app() -> FastAPI:
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.allowed_origins),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    cors_options = {
+        "allow_origins": list(settings.allowed_origins),
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+    if settings.env == "development":
+        cors_options["allow_origin_regex"] = ".*"
+    app.add_middleware(CORSMiddleware, **cors_options)
     app.mount("/Web/js", StaticFiles(directory=static_root / "Web" / "js"), name="web-js")
     app.include_router(health.router)
     app.include_router(auth.router)

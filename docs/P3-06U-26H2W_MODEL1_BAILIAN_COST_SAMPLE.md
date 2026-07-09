@@ -23,11 +23,11 @@
 
 ## 警告
 
-- 无
+- 内部 100 题证据未 ready；MODEL1 仍可只做 guarded planning
 
 ## 输出
 
-- `/private/var/folders/cv/nv4r5wsj1sl83z83j23cggb40000gn/T/pytest-of-ericlee/pytest-628/test_model1_defaults_to_no_ext0/model1/summary.json`
+- `C:\Users\123\AppData\Local\Temp\pytest-of-123\pytest-3\test_model1_defaults_to_no_ext0\model1\summary.json`
 
 ## 边界
 

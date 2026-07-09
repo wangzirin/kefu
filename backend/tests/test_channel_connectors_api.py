@@ -472,7 +472,7 @@ def test_public_website_widget_message_enters_conversation_inbox(client) -> None
     assert closed_poll["conversation_id"] == widget["conversation_id"]
     assert closed_poll["conversation_status"] == "closed"
     assert closed_poll["messages"][0]["sender_type"] == "system"
-    assert closed_poll["messages"][0]["content"] == "客服已关闭对话"
+    assert closed_poll["messages"][0]["content"] == "客服已关闭对话，本次咨询已结束。"
 
     closed_send_res = client.post(
         "/api/public/website-widget/messages",

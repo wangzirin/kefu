@@ -22,11 +22,13 @@ from app.schemas.outbox import (
     OutboxDeliveryQueueRunRead,
 )
 from app.services.delivery_failures import attach_delivery_normalization_and_review
+from app.services.channel_senders import send_outbox_draft
 
 
 READY_TO_SEND = "ready_to_send"
 DELIVERY_QUEUE = "delivery_queue"
 DELIVERY_QUEUE_WORKER = "delivery_queue_skeleton"
+CONNECTOR_SEND = "connector_send"
 NOT_SENT = "not_sent"
 QUEUED = "queued"
 LOCKED = "locked"
@@ -154,6 +156,9 @@ def _create_delivery_attempt(
     blocked_reason: str,
     result_status: str,
     max_attempts: int,
+    delivery_status: str = NOT_SENT,
+    external_message_id: str = "",
+    response_payload_override: dict | None = None,
 ) -> OutboxSendAttempt:
     now = utc_now()
     attempt_number = _next_attempt_number(db, draft.id)
@@ -180,7 +185,7 @@ def _create_delivery_attempt(
             "text": draft.reply_text,
         },
     }
-    response_payload = {
+    response_payload = response_payload_override or {
         "external_write": False,
         "external_write_requested": job.external_write_requested,
         "external_write_permitted": job.external_write_permitted,
@@ -202,16 +207,16 @@ def _create_delivery_attempt(
         channel_id=draft.channel_id,
         contact_id=draft.contact_id,
         attempt_number=attempt_number,
-        delivery_mode=DELIVERY_QUEUE,
+        delivery_mode=CONNECTOR_SEND if job.external_write_permitted else DELIVERY_QUEUE,
         provider=connector.provider,
         status=result_status,
-        delivery_status=NOT_SENT,
+        delivery_status=delivery_status,
         idempotency_key=f"delivery_queue:{job.id}:attempt:{attempt_number}",
-        external_message_id="",
+        external_message_id=external_message_id,
         request_payload=request_payload,
         response_payload=response_payload,
         error_message=blocked_reason,
-        operator_note="delivery queue skeleton; no external provider was called",
+        operator_note="connector sender executed" if job.external_write_permitted else "delivery queue skeleton; no external provider was called",
         created_by_id=principal.user.id,
         started_at=now,
         finished_at=now,
@@ -407,9 +412,24 @@ def _process_delivery_job(
     elif channel.status != "active":
         result_status = FAILED
         blocked_reason = "channel_not_active"
-    elif job.external_write_requested:
-        result_status = BLOCKED
-        blocked_reason = "external_sender_not_implemented"
+    delivery_status = NOT_SENT
+    external_message_id = ""
+    response_payload_override = None
+    if job.external_write_requested and result_status == SUCCEEDED:
+        send_result = send_outbox_draft(db, draft=draft, channel=channel, connector=connector)
+        result_status = send_result.status
+        delivery_status = send_result.delivery_status
+        external_message_id = send_result.external_message_id
+        blocked_reason = send_result.error_message
+        response_payload_override = {
+            **(send_result.response_payload or {}),
+            "external_write": True,
+            "external_write_requested": True,
+            "external_write_permitted": True,
+            "queue_job_id": job.id,
+            "worker_id": payload.worker_id,
+            "retryable": send_result.retryable,
+        }
 
     attempt = _create_delivery_attempt(
         db,
@@ -422,6 +442,9 @@ def _process_delivery_job(
         blocked_reason=blocked_reason,
         result_status=result_status,
         max_attempts=max_attempts,
+        delivery_status=delivery_status,
+        external_message_id=external_message_id,
+        response_payload_override=response_payload_override,
     )
     _finalize_job_after_attempt(
         db,
@@ -521,11 +544,11 @@ def run_outbox_delivery_queue(
         rate_limited=len(rate_limited_jobs),
         rate_limited_job_ids=[job.id for job in rate_limited_jobs],
         skipped_job_ids=skipped_job_ids,
-        external_write=False,
+        external_write=any(job.external_write_permitted for job in processed_jobs),
         kill_switch={
             "global_external_write_enabled": settings.outbox_external_write_enabled,
             "external_write_default": False,
-            "real_sender_available": False,
+            "real_sender_available": True,
             "lease": {
                 "worker_id": payload.worker_id,
                 "lease_seconds": payload.lease_seconds,

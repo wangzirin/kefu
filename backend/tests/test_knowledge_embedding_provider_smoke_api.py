@@ -1,5 +1,6 @@
 import json
 
+from app.services import knowledge as knowledge_service
 from test_knowledge_api import _bootstrap_user
 
 
@@ -157,3 +158,76 @@ def test_openai_compatible_embedding_provider_smoke_records_cost_latency_without
     assert smoke["raw_text_logged"] is False
     assert "不保存原文" not in json.dumps(smoke, ensure_ascii=False)
     assert smoke["response_metadata"]["usage"]["prompt_tokens"] == 12
+
+
+def test_local_bge_m3_embedding_provider_smoke_uses_flagembedding_without_raw_text(
+    client,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KNOWLEDGE_EMBEDDING_PROVIDER", "local_bge_m3")
+    monkeypatch.setenv("KNOWLEDGE_EMBEDDING_MODEL", "BAAI/bge-m3")
+
+    class FakeBgeM3Model:
+        def encode(self, texts, **kwargs):
+            assert texts == ["BGE-M3 本地开源 embedding smoke。"]
+            assert kwargs == {"return_dense": True, "return_sparse": False, "return_colbert_vecs": False}
+            return {"dense_vecs": [[0.1, 0.2, 0.3, 0.4]]}
+
+    monkeypatch.setattr(knowledge_service, "_load_bge_m3_model", lambda model_name: FakeBgeM3Model())
+    tenant, _, token = _bootstrap_user(
+        client,
+        slug="knowledge-embedding-smoke-bge-m3",
+        email="knowledge-embedding-smoke-bge-m3@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    smoke_res = client.post(
+        f"/api/tenants/{tenant['id']}/knowledge-embedding-provider-smoke-runs",
+        headers=headers,
+        json={"sample_text": "BGE-M3 本地开源 embedding smoke。"},
+    )
+
+    assert smoke_res.status_code == 201
+    smoke = smoke_res.json()
+    assert smoke["status"] == "succeeded"
+    assert smoke["embedding_provider"] == "local_bge_m3"
+    assert smoke["embedding_model"] == "BAAI/bge-m3"
+    assert smoke["vector_engine"] == "flagembedding_bge_m3_dense_v1"
+    assert smoke["embedding_dimension"] == 1024
+    assert smoke["output_dimension"] == 4
+    assert smoke["provider_call_performed"] is False
+    assert smoke["raw_text_logged"] is False
+    assert "本地开源" not in json.dumps(smoke, ensure_ascii=False)
+    assert smoke["response_metadata"]["runtime"] == "FlagEmbedding.BGEM3FlagModel"
+
+
+def test_local_bge_m3_embedding_provider_smoke_reports_missing_dependency(
+    client,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KNOWLEDGE_EMBEDDING_PROVIDER", "local_bge_m3")
+    monkeypatch.setattr(
+        knowledge_service,
+        "_load_bge_m3_model",
+        lambda _model_name: (_ for _ in ()).throw(RuntimeError("FlagEmbedding is not installed.")),
+    )
+    tenant, _, token = _bootstrap_user(
+        client,
+        slug="knowledge-embedding-smoke-bge-m3-missing",
+        email="knowledge-embedding-smoke-bge-m3-missing@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    smoke_res = client.post(
+        f"/api/tenants/{tenant['id']}/knowledge-embedding-provider-smoke-runs",
+        headers=headers,
+        json={"sample_text": "检查缺失依赖时不能保存原文。"},
+    )
+
+    assert smoke_res.status_code == 201
+    smoke = smoke_res.json()
+    assert smoke["status"] == "unavailable"
+    assert smoke["embedding_provider"] == "local_bge_m3"
+    assert smoke["output_dimension"] == 0
+    assert "FlagEmbedding is not installed" in smoke["error_message"]
+    assert "不能保存原文" not in json.dumps(smoke, ensure_ascii=False)

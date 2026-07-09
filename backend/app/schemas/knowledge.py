@@ -271,11 +271,21 @@ class KnowledgeDocumentCreate(BaseModel):
     title: str = Field(min_length=1, max_length=180)
     source_type: str = Field(default="manual_document", max_length=40)
     source_uri: str = Field(default="", max_length=500)
+    category: str = Field(default="", max_length=120)
     raw_text: str = Field(min_length=1, max_length=200000)
     tags: list[str] = Field(default_factory=list, max_length=20)
     status: str = Field(default="draft", pattern=KnowledgeStatusPattern)
     chunk_size: int = Field(default=900, ge=80, le=4000)
     chunk_overlap: int = Field(default=120, ge=0, le=1000)
+
+
+class KnowledgeDocumentUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=180)
+    source_uri: Optional[str] = Field(default=None, max_length=500)
+    raw_text: Optional[str] = Field(default=None, min_length=1, max_length=200000)
+    tags: Optional[list[str]] = Field(default=None, max_length=20)
+    status: Optional[str] = Field(default=None, pattern=KnowledgeStatusPattern)
+    category: Optional[str] = Field(default=None, max_length=120)
 
 
 class KnowledgeDocumentRead(BaseModel):
@@ -284,6 +294,8 @@ class KnowledgeDocumentRead(BaseModel):
     title: str
     source_type: str
     source_uri: str
+    category: str = ""
+    raw_text: str = ""
     content_hash: str
     tags: list[str]
     status: str
@@ -333,6 +345,7 @@ class KnowledgeDocumentSearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     status: str = Field(default="active", pattern=KnowledgeStatusPattern)
     min_score: float = Field(default=0.0, ge=0)
+    category: str = Field(default="", max_length=120)
 
 
 class KnowledgeDocumentSearchMatch(BaseModel):
@@ -365,6 +378,11 @@ class KnowledgeDocumentSearchResponse(BaseModel):
     reranker: str
     total_candidates: int
     matches: list[KnowledgeDocumentSearchMatch]
+    final_answer: str = ""
+    final_answer_status: str = "not_generated"
+    final_answer_source: str = ""
+    final_answer_citations: list[dict[str, Any]] = Field(default_factory=list)
+    knowledge_gap_required: bool = False
 
 
 class KnowledgeMeshNodeRead(BaseModel):

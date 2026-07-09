@@ -628,7 +628,7 @@ export function QualityReviewPanel({
       key: "channel-exception",
       label: "处理渠道异常",
       source: `${failureReviews.length + blockedJobs} 个失败复盘或阻断队列`,
-      evidence: "回执异常、授权异常、限流和真实外发关闭都要可追踪",
+      evidence: "回执异常、授权异常、限流和外部发送受控都要可追踪",
       owner: "交付/售后",
       next: "进入渠道中心，确认官方授权、回调和队列状态",
       href: qualityLinks.channelFailure,
