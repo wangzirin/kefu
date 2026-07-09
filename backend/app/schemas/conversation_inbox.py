@@ -26,6 +26,9 @@ class ConversationInboxItemRead(BaseModel):
     sla_status: str
     sla_due_at: Optional[datetime] = None
     human_review_open_count: int
+    latest_handoff_reason: str = ""
+    latest_handoff_reason_label: str = ""
+    latest_human_review_task_id: Optional[int] = None
     outbox_pending_count: int
     delivery_failure_open_count: int
     next_action: str

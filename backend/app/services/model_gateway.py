@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -97,6 +98,18 @@ class ModelDraftResult:
     budget_reason: str = ""
     budget_action: str = ""
     budget_policy_snapshot: dict | None = None
+
+
+@dataclass(frozen=True)
+class ModelIntentResult:
+    provider: str
+    model: str
+    status: str
+    intent: str
+    confidence: float
+    matched_terms: list[str]
+    reason: str
+    error_message: str = ""
 
 
 def _prompt_summary(intent: str, knowledge_count: int) -> str:
@@ -449,6 +462,103 @@ def _model_failure_result(
         error_message=error_message[:500],
         **_route_kwargs(route),
     )
+
+
+def classify_customer_intent_with_model(
+    user_message: str,
+    *,
+    settings: Settings | None = None,
+) -> ModelIntentResult:
+    settings = settings or get_settings()
+    siliconflow = get_siliconflow_model_service_config(settings)
+    intent_options = {
+        "complaint_handoff",
+        "after_sales_order",
+        "product_consulting",
+        "small_talk",
+        "clarify_needed",
+    }
+    if not siliconflow.api_key_configured:
+        return ModelIntentResult(
+            provider=SILICONFLOW_PROVIDER,
+            model=siliconflow.llm_model,
+            status="unavailable",
+            intent="",
+            confidence=0,
+            matched_terms=[],
+            reason="siliconflow_api_key_not_configured",
+        )
+
+    system_prompt = (
+        "你是客服系统的意图分类器，只输出 JSON，不要输出解释。"
+        "可选 intent 只有：complaint_handoff, after_sales_order, product_consulting, small_talk, clarify_needed。"
+        "分类规则：投诉、明确转人工、强烈不满归 complaint_handoff；订单、物流、退款、退换货、售后归 after_sales_order；"
+        "商品、价格、营业时间、套餐、业务流程、服务能力等需要知识库支撑的问题归 product_consulting；"
+        "问候、感谢、简单寒暄归 small_talk；只表达需要帮助但没有具体业务问题归 clarify_needed。"
+        "返回字段：intent, confidence, matched_terms, reason。"
+    )
+    user_prompt = f"客户消息：{user_message}"
+    payload = {
+        "model": siliconflow.llm_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+        "enable_thinking": False,
+        "max_tokens": 160,
+    }
+    endpoint = siliconflow.base_url.rstrip("/") + "/chat/completions"
+    http_request = Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {siliconflow.api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(http_request, timeout=settings.model_http_timeout_seconds) as response:
+            raw_body = response.read().decode("utf-8")
+        data = json.loads(raw_body)
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("missing choices in intent response")
+        message = choices[0].get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            raise ValueError("missing intent message content")
+        content = message["content"].strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
+        if not content.startswith("{"):
+            json_match = re.search(r"\{.*\}", content, flags=re.DOTALL)
+            if not json_match:
+                raise ValueError("missing JSON object in intent response")
+            content = json_match.group(0)
+        parsed = json.loads(content)
+        intent = str(parsed.get("intent") or "").strip()
+        if intent not in intent_options:
+            raise ValueError(f"unsupported intent: {intent}")
+        confidence = float(parsed.get("confidence") or 0)
+        matched_terms = parsed.get("matched_terms") if isinstance(parsed.get("matched_terms"), list) else []
+        return ModelIntentResult(
+            provider=SILICONFLOW_PROVIDER,
+            model=siliconflow.llm_model,
+            status="succeeded",
+            intent=intent,
+            confidence=max(0.0, min(1.0, confidence)),
+            matched_terms=[str(term)[:80] for term in matched_terms if str(term).strip()][:8],
+            reason=str(parsed.get("reason") or "model_intent_classified")[:300],
+        )
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        return ModelIntentResult(
+            provider=SILICONFLOW_PROVIDER,
+            model=siliconflow.llm_model,
+            status="failed",
+            intent="",
+            confidence=0,
+            matched_terms=[],
+            reason="model_intent_classification_failed",
+            error_message=str(exc)[:500],
+        )
 
 
 def generate_reply_draft(request: ModelDraftRequest, settings: Settings | None = None) -> ModelDraftResult:

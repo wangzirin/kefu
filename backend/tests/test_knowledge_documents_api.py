@@ -276,6 +276,31 @@ def test_customer_service_synonym_query_generates_final_answer_from_right_docume
     assert "蓝牙" not in search["final_answer"]
 
 
+def test_customer_service_search_returns_safe_answer_when_no_knowledge_hit(client) -> None:
+    tenant, _, token = _bootstrap_user(
+        client,
+        slug="knowledge-doc-no-hit-safe-answer",
+        email="knowledge-doc-no-hit-safe-answer@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    search_res = client.post(
+        f"/api/tenants/{tenant['id']}/knowledge-document-searches",
+        headers=headers,
+        json={"query": "你们支持火星基地专属套餐吗", "top_k": 3},
+    )
+
+    assert search_res.status_code == 200
+    search = search_res.json()
+    assert search["matches"] == []
+    assert search["final_answer_status"] == "safe_no_knowledge_response"
+    assert "关于您提到的“你们支持火星基地专属套餐吗”" in search["final_answer"]
+    assert "当前的知识库中暂时还没有收录相关信息" in search["final_answer"]
+    assert "避免给您错误引导" in search["final_answer"]
+    assert search["knowledge_gap_required"] is True
+    assert search["final_answer_citations"] == []
+
+
 def test_agent_can_search_documents_but_cannot_import_them(client) -> None:
     tenant, _, owner_token = _bootstrap_user(
         client,

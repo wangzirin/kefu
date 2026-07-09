@@ -1074,6 +1074,9 @@ export interface ConversationInboxItem {
   sla_status: string;
   sla_due_at: string | null;
   human_review_open_count: number;
+  latest_handoff_reason: string;
+  latest_handoff_reason_label: string;
+  latest_human_review_task_id: number | null;
   outbox_pending_count: number;
   delivery_failure_open_count: number;
   next_action: string;

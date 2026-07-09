@@ -629,6 +629,16 @@ def _confidence_from_score(score: float) -> float:
     return round(min(0.99, score / (score + 4.0)), 4)
 
 
+def _safe_no_knowledge_final_answer(query: str) -> str:
+    clean_query = " ".join(query.strip().split())
+    if len(clean_query) > 180:
+        clean_query = clean_query[:177] + "..."
+    return (
+        f"关于您提到的“{clean_query}”，我当前的知识库中暂时还没有收录相关信息。"
+        "为了避免给您错误引导，我无法直接给出确切答案。"
+    )
+
+
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -7934,7 +7944,16 @@ def search_knowledge_documents(
     final_answer_status = "knowledge_gap" if not selected_matches else "not_generated"
     final_answer_source = ""
     final_answer_citations: list[dict[str, Any]] = []
-    if selected_matches:
+    answerable_matches = [
+        match
+        for match in selected_matches
+        if match.confidence >= 0.5 or match.score >= 1.25 or match.reranker_score >= 0.45 or len(match.matched_terms) >= 3
+    ]
+    if not answerable_matches:
+        final_answer = _safe_no_knowledge_final_answer(payload.query)
+        final_answer_status = "safe_no_knowledge_response" if not selected_matches else "low_confidence_safe_response"
+        final_answer_source = "safe_no_knowledge_template"
+    else:
         model_result = generate_reply_draft(
             ModelDraftRequest(
                 user_message=payload.query,
@@ -7946,10 +7965,10 @@ def search_knowledge_documents(
                         source_uri=match.source_uri,
                         matched_terms=match.matched_terms,
                     )
-                    for match in selected_matches
+                    for match in answerable_matches
                 ],
                 provider="auto",
-                confidence=max(match.confidence for match in selected_matches),
+                confidence=max(match.confidence for match in answerable_matches),
                 risk_level="low",
             )
         )
@@ -7958,7 +7977,7 @@ def search_knowledge_documents(
             final_answer_status = "generated"
             final_answer_source = f"{model_result.provider}:{model_result.model}"
         else:
-            top_match = selected_matches[0]
+            top_match = answerable_matches[0]
             final_answer = top_match.content_preview.strip()
             final_answer_status = "fallback_from_top_match"
             final_answer_source = "top_knowledge_match"
@@ -7970,7 +7989,7 @@ def search_knowledge_documents(
                 "source_uri": match.source_uri,
                 "chunk_index": match.chunk_index,
             }
-            for match in selected_matches
+            for match in answerable_matches
         ]
     return KnowledgeDocumentSearchResponse(
         query=payload.query,
@@ -7988,7 +8007,7 @@ def search_knowledge_documents(
         final_answer_status=final_answer_status,
         final_answer_source=final_answer_source,
         final_answer_citations=final_answer_citations,
-        knowledge_gap_required=not selected_matches,
+        knowledge_gap_required=not answerable_matches,
     )
 
 

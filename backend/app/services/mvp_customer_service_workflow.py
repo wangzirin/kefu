@@ -9,7 +9,13 @@ from app.core.auth import CurrentPrincipal
 from app.models import Conversation, Message, ObjectKnowledgeCard
 from app.schemas.knowledge import KnowledgeDocumentSearchRequest, KnowledgeSearchRequest
 from app.services.knowledge import search_knowledge_cards, search_knowledge_documents
-from app.services.model_gateway import ModelDraftKnowledge, ModelDraftRequest, ModelDraftResult, generate_reply_draft
+from app.services.model_gateway import (
+    ModelDraftKnowledge,
+    ModelDraftRequest,
+    ModelDraftResult,
+    classify_customer_intent_with_model,
+    generate_reply_draft,
+)
 
 
 WORKFLOW_NAME = "ai_customer_service_mvp"
@@ -26,7 +32,9 @@ INJECTION_TERMS = {
     "绕过限制",
 }
 SENSITIVE_TERMS = {"炸弹", "枪支", "毒品", "自杀", "自残", "杀人", "爆炸", "制毒"}
-COMPLAINT_TERMS = {"投诉", "转人工", "真人客服", "人工客服", "差评", "起诉", "律师", "赔偿", "举报", "监管", "工商"}
+HUMAN_AGENT_TERMS = {"转人工", "真人客服", "人工客服", "人工", "找人", "客服人员", "人工处理"}
+ABNORMAL_EMOTION_TERMS = {"气死", "太差", "垃圾", "崩溃", "生气", "愤怒", "不爽", "忍不了", "失望"}
+COMPLAINT_TERMS = {"投诉", "差评", "起诉", "律师", "赔偿", "举报", "监管", "工商"}
 PRODUCT_TERMS = {
     "商品",
     "产品",
@@ -107,6 +115,12 @@ def _safety_status(text: str) -> tuple[str, str]:
 
 
 def _classify_intent(text: str) -> tuple[str, list[str]]:
+    human_hits = _contains_any(text, HUMAN_AGENT_TERMS)
+    if human_hits:
+        return "complaint_handoff", human_hits
+    emotion_hits = _contains_any(text, ABNORMAL_EMOTION_TERMS)
+    if emotion_hits:
+        return "complaint_handoff", emotion_hits
     for intent, terms in (
         ("complaint_handoff", COMPLAINT_TERMS),
         ("after_sales_order", AFTER_SALES_TERMS),
@@ -119,6 +133,79 @@ def _classify_intent(text: str) -> tuple[str, list[str]]:
     if len(text.strip()) <= 8:
         return "clarify_needed", []
     return "clarify_needed", []
+
+
+def _manual_handoff_reason(
+    *,
+    text: str,
+    safety_status: str,
+    state: str,
+    fallback_reason: str,
+    model_result: ModelDraftResult | None,
+) -> str:
+    if safety_status == "blocked_prompt_injection":
+        return "prompt_injection"
+    if safety_status == "warning_sensitive":
+        return "sensitive_content"
+    if _contains_any(text, HUMAN_AGENT_TERMS):
+        return "customer_requested_human"
+    if _contains_any(text, COMPLAINT_TERMS):
+        return "complaint"
+    if _contains_any(text, ABNORMAL_EMOTION_TERMS):
+        return "abnormal_emotion"
+    if state == "knowledge_gap" or fallback_reason == "product_knowledge_not_found":
+        return "no_knowledge_hit"
+    if model_result is not None and model_result.status in {"failed", "unavailable"}:
+        return "model_failure"
+    if fallback_reason == "product_rag_low_confidence":
+        return "low_confidence"
+    return fallback_reason
+
+
+def _classify_intent_with_model_fallback(text: str) -> tuple[str, list[str], dict]:
+    rule_intent, rule_hits = _classify_intent(text)
+    model_result = classify_customer_intent_with_model(text)
+    if rule_intent == "complaint_handoff":
+        return (
+            rule_intent,
+            rule_hits,
+            {
+                "provider": model_result.provider,
+                "model": model_result.model,
+                "status": model_result.status,
+                "confidence": model_result.confidence,
+                "reason": model_result.reason,
+                "error_message": model_result.error_message,
+                "fallback_intent": rule_intent,
+                "rule_override": "human_handoff_guardrail",
+            },
+        )
+    if model_result.status == "succeeded" and model_result.intent and model_result.confidence >= 0.55:
+        return (
+            model_result.intent,
+            model_result.matched_terms or rule_hits,
+            {
+                "provider": model_result.provider,
+                "model": model_result.model,
+                "status": model_result.status,
+                "confidence": model_result.confidence,
+                "reason": model_result.reason,
+                "fallback_intent": rule_intent,
+            },
+        )
+    return (
+        rule_intent,
+        rule_hits,
+        {
+            "provider": model_result.provider,
+            "model": model_result.model,
+            "status": model_result.status,
+            "confidence": model_result.confidence,
+            "reason": model_result.reason,
+            "error_message": model_result.error_message,
+            "fallback_intent": rule_intent,
+        },
+    )
 
 
 def _synthetic_model_reply(*, user_message: str, intent: str, instruction: str, confidence: float = 0.88) -> ModelDraftResult:
@@ -214,7 +301,7 @@ def run_mvp_customer_service_workflow(
     principal: CurrentPrincipal | None,
 ) -> MvpWorkflowResult:
     safety_status, processed_text = _safety_status(message.content.strip())
-    intent, intent_hits = _classify_intent(processed_text)
+    intent, intent_hits, intent_classifier = _classify_intent_with_model_fallback(processed_text)
     if safety_status == "blocked_prompt_injection":
         intent = "small_talk"
     if safety_status == "warning_sensitive":
@@ -285,7 +372,7 @@ def run_mvp_customer_service_workflow(
             knowledge_matches = _fallback_object_knowledge(db, tenant_id=conversation.tenant_id, query=processed_text)
         if not knowledge_matches:
             state = "knowledge_gap"
-            reason = "product_knowledge_not_found"
+            reason = "no_knowledge_hit"
             delivery_mode = "human_review"
             handoff_required = True
             knowledge_gap_required = True
@@ -314,7 +401,12 @@ def run_mvp_customer_service_workflow(
             )
             draft_reply = model_result.draft_text
             state = "auto_reply_ready" if model_result.status == "succeeded" and confidence >= 0.72 else "manual_gate_required"
-            reason = "product_rag_ready" if state == "auto_reply_ready" else "product_rag_low_confidence"
+            if state == "auto_reply_ready":
+                reason = "product_rag_ready"
+            elif model_result.status in {"failed", "unavailable"}:
+                reason = "model_failure"
+            else:
+                reason = "low_confidence"
             reply_branch = "product_consulting_rag"
             delivery_mode = "external_write_allowed" if state == "auto_reply_ready" else "human_review"
             handoff_required = state != "auto_reply_ready"
@@ -345,7 +437,13 @@ def run_mvp_customer_service_workflow(
         draft_reply = model_result.draft_text or draft_reply
         confidence = 0.5
         state = "manual_gate_required"
-        reason = "complaint_or_handoff_requested"
+        reason = _manual_handoff_reason(
+            text=processed_text,
+            safety_status=safety_status,
+            state=state,
+            fallback_reason="complaint",
+            model_result=model_result,
+        )
         reply_branch = "complaint_handoff"
         delivery_mode = "human_review"
         handoff_required = True
@@ -374,12 +472,27 @@ def run_mvp_customer_service_workflow(
 
     if safety_status != "safe":
         state = "manual_gate_required"
-        reason = safety_status
+        reason = _manual_handoff_reason(
+            text=processed_text,
+            safety_status=safety_status,
+            state=state,
+            fallback_reason=safety_status,
+            model_result=model_result,
+        )
         delivery_mode = "human_review"
         handoff_required = True
         confidence = min(confidence, 0.4)
         risk_level = "high" if safety_status == "warning_sensitive" else "medium"
         reply_branch = safety_status
+
+    if handoff_required:
+        reason = _manual_handoff_reason(
+            text=processed_text,
+            safety_status=safety_status,
+            state=state,
+            fallback_reason=reason,
+            model_result=model_result,
+        )
 
     payload = {
         "workflow_name": WORKFLOW_NAME,
@@ -391,6 +504,7 @@ def run_mvp_customer_service_workflow(
         "knowledge_matches": _knowledge_match_payload(knowledge_matches),
         "knowledge_gap_required": knowledge_gap_required,
         "handoff_required": handoff_required,
+        "handoff_reason": reason if handoff_required else "",
         "model_call": {
             "provider": model_result.provider,
             "model": model_result.model,
@@ -401,6 +515,7 @@ def run_mvp_customer_service_workflow(
         else None,
         "external_write_allowed_after_gate": state == "auto_reply_ready",
         "matched_terms": intent_hits,
+        "intent_classifier": intent_classifier,
     }
     return MvpWorkflowResult(
         intent=intent,

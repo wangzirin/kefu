@@ -12265,25 +12265,38 @@ function KnowledgeQATestPanel({
               {searchStatus === "error" && searchMessage ? <span>{searchMessage}</span> : null}
             </div>
             {searchResult ? (
-              searchResult.matches.length > 0 ? (
+              searchResult.final_answer ? (
                 <>
                   <div className="knowledge-final-answer">
                     <strong>最终回答</strong>
                     <p>{searchResult.final_answer || "已命中知识，但最终回答生成失败，请人工根据引用内容确认后回复。"}</p>
                     <span>
-                      {searchResult.final_answer_status === "generated" ? "模型生成" : "知识片段兜底"}
+                      {searchResult.final_answer_status === "generated"
+                        ? "模型生成"
+                        : searchResult.final_answer_status === "safe_no_knowledge_response"
+                          ? "未命中知识 · 安全回复"
+                          : searchResult.final_answer_status === "low_confidence_safe_response"
+                            ? "低置信 · 安全回复"
+                            : "知识片段兜底"}
                       {searchResult.final_answer_citations.length > 0 ? ` · 引用 ${searchResult.final_answer_citations.length} 条` : ""}
                     </span>
                   </div>
-                  <div className="knowledge-test-results recall-results">
-                    {searchResult.matches.map((match) => (
-                      <article key={`${match.document_id}-${match.chunk_id}`}>
-                        <strong>{match.document_title}</strong>
-                        <span>片段 {match.chunk_index} · 置信度 {formatPercent(match.confidence)}</span>
-                        <p>{match.content_preview}</p>
-                      </article>
-                    ))}
-                  </div>
+                  {searchResult.matches.length > 0 ? (
+                    <div className="knowledge-test-results recall-results">
+                      {searchResult.matches.map((match) => (
+                        <article key={`${match.document_id}-${match.chunk_id}`}>
+                          <strong>{match.document_title}</strong>
+                          <span>片段 {match.chunk_index} · 置信度 {formatPercent(match.confidence)}</span>
+                          <p>{match.content_preview}</p>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="knowledge-empty-table compact">
+                      <FileText size={32} />
+                      <span>没有引用知识，已生成安全回复</span>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="knowledge-empty-table compact">
@@ -17281,6 +17294,21 @@ function formatPriorityLabel(value: string) {
   return labels[value] ?? value;
 }
 
+function formatHandoffReasonLabel(value: string) {
+  const labels: Record<string, string> = {
+    complaint: "投诉",
+    abnormal_emotion: "情绪异常",
+    sensitive_content: "敏感内容",
+    prompt_injection: "Prompt 注入",
+    no_knowledge_hit: "无知识命中",
+    low_confidence: "低置信",
+    model_failure: "模型失败",
+    external_send_failure: "外发失败",
+    customer_requested_human: "客户要求人工"
+  };
+  return labels[value] ?? (value || "需要人工接管");
+}
+
 function conversationActionNote(action: ConversationWorkflowActionName) {
   const notes: Record<ConversationWorkflowActionName, string> = {
     claim: "坐席接起会话",
@@ -18635,6 +18663,9 @@ function createDemoWorkspace() {
       sla_status: slaStatus,
       sla_due_at: new Date(getTimeValue(item.conversation.last_message_at) + 30 * 60 * 1000).toISOString(),
       human_review_open_count: item.status === "open" ? 1 : 0,
+      latest_handoff_reason: item.status === "open" ? item.reason : "",
+      latest_handoff_reason_label: item.status === "open" ? formatHandoffReasonLabel(item.reason) : "",
+      latest_human_review_task_id: item.status === "open" ? item.id : null,
       outbox_pending_count: relatedDrafts.filter((draft) =>
         ["pending_confirmation", "ready_to_send"].includes(draft.status)
       ).length,

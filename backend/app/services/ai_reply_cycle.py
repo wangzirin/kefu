@@ -11,6 +11,7 @@ from app.models import (
     ChannelConnector,
     Conversation,
     ConversationEvent,
+    HumanReviewTask,
     KnowledgeGapItem,
     Message,
     ModelCallRecord,
@@ -32,6 +33,17 @@ from app.services.mvp_customer_service_workflow import run_mvp_customer_service_
 from app.services.outbox_delivery_queue import run_outbox_delivery_queue
 
 HUMAN_CONTROLLED_STATUSES = {"queued_for_me", "assigned_to_me", "handoff", "follow_up", "waiting_customer"}
+HANDOFF_REASON_LABELS = {
+    "complaint": "投诉",
+    "abnormal_emotion": "情绪异常",
+    "sensitive_content": "敏感内容",
+    "prompt_injection": "Prompt 注入",
+    "no_knowledge_hit": "无知识命中",
+    "low_confidence": "低置信",
+    "model_failure": "模型失败",
+    "external_send_failure": "外发失败",
+    "customer_requested_human": "客户要求人工",
+}
 
 
 def _create_gap_for_decision(db: Session, decision: ReplyDecision, message: Message) -> None:
@@ -67,6 +79,50 @@ def _create_gap_for_decision(db: Session, decision: ReplyDecision, message: Mess
             updated_at=utc_now(),
         )
     )
+
+
+def _handoff_label(reason: str) -> str:
+    return HANDOFF_REASON_LABELS.get(reason, reason or "需要人工接管")
+
+
+def _create_human_review_task_for_decision(
+    db: Session,
+    *,
+    workflow_run: WorkflowRun,
+    decision: ReplyDecision,
+    assigned_user_id: int | None,
+    risk_level: str,
+) -> HumanReviewTask:
+    existing = db.scalar(
+        select(HumanReviewTask).where(
+            HumanReviewTask.tenant_id == decision.tenant_id,
+            HumanReviewTask.workflow_run_id == workflow_run.id,
+            HumanReviewTask.conversation_id == decision.conversation_id,
+            HumanReviewTask.message_id == decision.message_id,
+            HumanReviewTask.status == "open",
+        )
+    )
+    if existing is not None:
+        return existing
+    now = utc_now()
+    task = HumanReviewTask(
+        tenant_id=decision.tenant_id,
+        workflow_run_id=workflow_run.id,
+        conversation_id=decision.conversation_id,
+        message_id=decision.message_id,
+        status="open",
+        reason=decision.reason,
+        risk_level=risk_level,
+        draft_reply=decision.draft_reply,
+        assigned_user_id=assigned_user_id,
+        created_at=now,
+    )
+    workflow_run.status = "waiting_human"
+    workflow_run.current_step = "human_review"
+    workflow_run.updated_at = now
+    db.add(task)
+    db.flush()
+    return task
 
 
 def _principal_for_cycle(db: Session, *, tenant_id: int, actor_id: int | None) -> CurrentPrincipal | None:
@@ -289,6 +345,7 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
     model_status = candidate.model_result.status if candidate.model_result else "not_called"
     outbox_draft_id = None
     delivery_job_id = None
+    human_review_task_id = None
     delivery_status = "not_requested"
     if candidate.model_result is not None:
         route = select_model_route(
@@ -367,8 +424,9 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
                         conversation.status = "bot_visiting"
                 else:
                     record.state = "manual_gate_required"
-                    record.reason = "external_delivery_failed"
+                    record.reason = "external_send_failure"
                     record.delivery_mode = "human_review"
+                    record.external_write_allowed = False
                     conversation.status = "queued_for_me"
                     conversation.assigned_user_id = conversation.assigned_user_id or handoff_user_id
             else:
@@ -410,11 +468,22 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
     elif record.state != "auto_reply_ready":
         conversation.status = "queued_for_me"
         conversation.assigned_user_id = conversation.assigned_user_id or handoff_user_id
+    if record.state != "auto_reply_ready":
+        task = _create_human_review_task_for_decision(
+            db,
+            workflow_run=workflow_run,
+            decision=record,
+            assigned_user_id=conversation.assigned_user_id or handoff_user_id,
+            risk_level=candidate.risk_level,
+        )
+        human_review_task_id = task.id
     record.decision_payload = {
         **record.decision_payload,
         "outbox_draft_id": outbox_draft_id,
         "delivery_job_id": delivery_job_id,
+        "human_review_task_id": human_review_task_id,
         "delivery_status": delivery_status,
+        "handoff_reason_label": _handoff_label(record.reason),
     }
 
     db.add(
@@ -430,7 +499,9 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
                 "outbound_message_id": outbound_message_id,
                 "outbox_draft_id": outbox_draft_id,
                 "delivery_job_id": delivery_job_id,
+                "human_review_task_id": human_review_task_id,
                 "delivery_status": delivery_status,
+                "handoff_reason_label": _handoff_label(record.reason),
                 "secret_included": False,
             }, ensure_ascii=False),
         )
@@ -450,7 +521,9 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
             "outbound_message_id": outbound_message_id,
             "outbox_draft_id": outbox_draft_id,
             "delivery_job_id": delivery_job_id,
+            "human_review_task_id": human_review_task_id,
             "delivery_status": delivery_status,
+            "handoff_reason_label": _handoff_label(record.reason),
             "secret_included": False,
         },
     )
@@ -463,6 +536,7 @@ def process_inbound_message_for_ai(db: Session, *, message_id: int, actor_id: in
         "outbound_message_id": outbound_message_id,
         "outbox_draft_id": outbox_draft_id,
         "delivery_job_id": delivery_job_id,
+        "human_review_task_id": human_review_task_id,
         "delivery_status": delivery_status,
         "conversation_status": conversation.status,
     }

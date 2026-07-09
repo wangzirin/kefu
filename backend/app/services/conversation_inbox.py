@@ -51,6 +51,17 @@ PRIORITY_ORDER = {
     "normal": 1,
     "low": 0,
 }
+HANDOFF_REASON_LABELS = {
+    "complaint": "投诉",
+    "abnormal_emotion": "情绪异常",
+    "sensitive_content": "敏感内容",
+    "prompt_injection": "Prompt 注入",
+    "no_knowledge_hit": "无知识命中",
+    "low_confidence": "低置信",
+    "model_failure": "模型失败",
+    "external_send_failure": "外发失败",
+    "customer_requested_human": "客户要求人工",
+}
 
 
 def _require_same_tenant(tenant_id: int, principal: CurrentPrincipal) -> None:
@@ -144,6 +155,19 @@ def _next_action(
     return "继续观察"
 
 
+def _latest_open_human_review_task(db: Session, conversation: Conversation) -> HumanReviewTask | None:
+    return db.scalar(
+        select(HumanReviewTask)
+        .where(
+            HumanReviewTask.tenant_id == conversation.tenant_id,
+            HumanReviewTask.conversation_id == conversation.id,
+            HumanReviewTask.status == "open",
+        )
+        .order_by(HumanReviewTask.created_at.desc(), HumanReviewTask.id.desc())
+        .limit(1)
+    )
+
+
 def _build_inbox_item(db: Session, conversation: Conversation, now: datetime) -> ConversationInboxItemRead:
     channel = db.get(Channel, conversation.channel_id)
     contact = db.get(Contact, conversation.contact_id)
@@ -167,6 +191,7 @@ def _build_inbox_item(db: Session, conversation: Conversation, now: datetime) ->
             HumanReviewTask.status == "open",
         ),
     )
+    latest_human_review_task = _latest_open_human_review_task(db, conversation)
     outbox_pending_count = _count_scalar(
         db,
         select(func.count(OutboxDraft.id)).where(
@@ -210,6 +235,13 @@ def _build_inbox_item(db: Session, conversation: Conversation, now: datetime) ->
         sla_status=sla_status,
         sla_due_at=sla_due_at,
         human_review_open_count=human_review_open_count,
+        latest_handoff_reason=latest_human_review_task.reason if latest_human_review_task else "",
+        latest_handoff_reason_label=(
+            HANDOFF_REASON_LABELS.get(latest_human_review_task.reason, latest_human_review_task.reason)
+            if latest_human_review_task
+            else ""
+        ),
+        latest_human_review_task_id=latest_human_review_task.id if latest_human_review_task else None,
         outbox_pending_count=outbox_pending_count,
         delivery_failure_open_count=delivery_failure_open_count,
         next_action=_next_action(

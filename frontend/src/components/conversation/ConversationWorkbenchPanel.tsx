@@ -804,7 +804,11 @@ export function ConversationWorkbenchPanel({
                     </span>
                     <span className="service-thread-meta">
                       <small>{formatWaitingMinutes(item.waiting_minutes)}</small>
-                      {hasManualGateSignal(item) ? <span className="thread-status-dot is-hot">转人工</span> : null}
+                      {hasManualGateSignal(item) ? (
+                        <span className="thread-status-dot is-hot">
+                          {item.latest_handoff_reason_label || "转人工"}
+                        </span>
+                      ) : null}
                       {!hasManualGateSignal(item) && item.sla_status === "breached" ? <span className="thread-status-dot is-hot">超时</span> : null}
                       {!hasManualGateSignal(item) && item.delivery_failure_open_count > 0 ? <span className="thread-status-dot is-hot">异常</span> : null}
                     </span>
@@ -1466,7 +1470,15 @@ function formatReplyDecisionReasonLabel(value: string) {
     manual_review_terms: "命中需要人工确认的话术或场景",
     no_business_object_match: "未识别到可用业务对象",
     no_knowledge_card_match: "未命中可引用知识卡",
+    complaint: "投诉",
+    abnormal_emotion: "情绪异常",
+    sensitive_content: "敏感内容",
+    prompt_injection: "Prompt 注入",
+    no_knowledge_hit: "无知识命中",
     low_confidence: "置信度不足",
+    model_failure: "模型失败",
+    external_send_failure: "外发失败",
+    customer_requested_human: "客户要求人工",
     blocked_policy_terms: "命中策略阻断词",
     external_write_disabled: "真实外发开关关闭"
   };
