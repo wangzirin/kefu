@@ -209,12 +209,12 @@ deploy/start-local-pilot.sh deploy/customer.env
 
 开发环境仍可使用普通 compose 或手动后端启动，但不能把开发命令当作客户交付入口。
 
-本地手动开发时，建议后端跑在 `8081`：
+本地手动开发时，也建议后端固定跑在 `8000`：
 
 ```bash
 cd standard_ops/backend
 . .venv/bin/activate
-uvicorn app.main:app --host 127.0.0.1 --port 8081
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 本阶段只承诺骨架。真实模型密钥、平台授权和生产域名不写入仓库。

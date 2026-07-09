@@ -119,6 +119,7 @@ def _create_connector(
     public_config: dict | None = None,
     webhook_path: str | None = None,
     signature_mode: str = "wecom_token_aeskey",
+    external_write_enabled: bool = False,
 ) -> dict:
     default_public_config = public_config
     if default_public_config is None and provider == "wecom":
@@ -140,6 +141,7 @@ def _create_connector(
             "public_config": default_public_config or {"corp_id_placeholder": "configured_in_secret_store"},
             "webhook_path": webhook_path or f"/api/webhooks/{provider}/channels/{channel_id}",
             "signature_mode": signature_mode,
+            "external_write_enabled": external_write_enabled,
         },
     )
     assert res.status_code == 201
@@ -254,6 +256,76 @@ def test_ai_service_status_and_connector_secrets_never_return_plaintext(client, 
     verification = verification_res.json()
     assert verification["status"] == "verified"
     assert verification["external_write_enabled"] is False
+    assert verification["secret_included"] is False
+
+
+def test_wechat_kf_manual_connector_requires_and_stores_open_kfid_without_plaintext(client, monkeypatch, tmp_path) -> None:
+    tenant, token = _bootstrap_owner(
+        client,
+        slug="wechat-kf-manual-bind",
+        email="wechat-kf-manual-bind@example.com",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    monkeypatch.setattr(
+        "app.services.channel_secret_store._secret_store_path",
+        lambda: tmp_path / "local_channel_secrets.json",
+    )
+    channel_res = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        headers=headers,
+        json={"type": "wechat_kf", "name": "微信客服", "reply_mode": "assist", "status": "active"},
+    )
+    assert channel_res.status_code == 201
+    channel = channel_res.json()
+
+    connector = _create_connector(
+        client,
+        channel["id"],
+        headers,
+        provider="wechat_kf",
+        display_name="微信客服手动接入",
+        public_config={
+            "enterprise_name": "测试企业",
+            "corp_id": "ww_manual_bind_corp",
+            "callback_url": f"/api/webhooks/wechat-kf/channels/{channel['id']}",
+        },
+        webhook_path=f"/api/webhooks/wechat-kf/channels/{channel['id']}",
+        signature_mode="wechat_kf_token_aeskey",
+    )
+    assert connector["secret_status"] == "not_configured"
+
+    missing_res = client.post(f"/api/channels/{channel['id']}/connector-verification", headers=headers)
+    assert missing_res.status_code == 200
+    assert "open_kfid" in missing_res.json()["missing_fields"]
+
+    secret_res = client.post(
+        f"/api/channels/{channel['id']}/connector-secrets",
+        headers=headers,
+        json={
+            "secrets": {
+                "token": "token-should-not-return",
+                "encoding_aes_key": "aes-should-not-return",
+                "app_secret": "secret-should-not-return",
+                "open_kfid": "open-kfid-should-not-return",
+            }
+        },
+    )
+    assert secret_res.status_code == 200
+    secret_body = secret_res.json()
+    assert secret_body["status"] == "configured"
+    assert secret_body["field_status"] == {
+        "app_secret": "configured",
+        "encoding_aes_key": "configured",
+        "open_kfid": "configured",
+        "token": "configured",
+    }
+    assert "should-not-return" not in str(secret_body)
+
+    verification_res = client.post(f"/api/channels/{channel['id']}/connector-verification", headers=headers)
+    assert verification_res.status_code == 200
+    verification = verification_res.json()
+    assert verification["status"] == "verified"
+    assert verification["missing_fields"] == []
     assert verification["secret_included"] is False
 
 
@@ -604,7 +676,7 @@ def test_website_widget_auto_replies_only_after_published_knowledge_and_model_re
             total_chars=160,
         )
 
-    monkeypatch.setattr("app.services.ai_reply_cycle.generate_reply_draft", _fake_generate_reply_draft)
+    monkeypatch.setattr("app.services.mvp_customer_service_workflow.generate_reply_draft", _fake_generate_reply_draft)
     widget_res = client.post(
         "/api/public/website-widget/messages",
         json={
@@ -634,7 +706,7 @@ def test_website_widget_auto_replies_only_after_published_knowledge_and_model_re
     assert len(messages) == 1
     assert messages[0]["sender_type"] == "ai"
     assert "负责人发布" in messages[0]["content"]
-    assert "启用 AI 接待" in messages[0]["content"]
+    assert "启用AI接待" in messages[0]["content"].replace(" ", "")
 
 
 def test_public_website_widget_script_is_hosted(client) -> None:

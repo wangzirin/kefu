@@ -14,6 +14,8 @@ from app.models import (
     DeliveryFailureReview,
     HumanReviewTask,
     Message,
+    ChannelConnector,
+    OutboxDeliveryJob,
     OutboxDraft,
     ReplyDecision,
     Team,
@@ -27,6 +29,8 @@ from app.schemas.conversation_inbox import (
     ConversationInboxList,
     ConversationWorkflowAction,
 )
+from app.schemas.outbox import OutboxDeliveryQueueRunCreate
+from app.services.outbox_delivery_queue import run_outbox_delivery_queue
 
 SLA_WARNING_MINUTES = 30
 SLA_BREACH_MINUTES = 60
@@ -63,6 +67,7 @@ HANDOFF_REASON_LABELS = {
     "external_send_failure": "外发失败",
     "customer_requested_human": "客户要求人工",
 }
+EXTERNAL_REPLY_CHANNEL_TYPES = {"wechat_kf", "wechat_customer_service", "wecom", "enterprise_wechat"}
 
 
 def _require_same_tenant(tenant_id: int, principal: CurrentPrincipal) -> None:
@@ -180,6 +185,73 @@ def _latest_manual_reply_decision(db: Session, conversation: Conversation) -> Re
         .order_by(ReplyDecision.created_at.desc(), ReplyDecision.id.desc())
         .limit(1)
     )
+
+
+def _ready_external_connector(db: Session, conversation: Conversation) -> ChannelConnector | None:
+    channel = db.get(Channel, conversation.channel_id)
+    if channel is None or channel.type not in EXTERNAL_REPLY_CHANNEL_TYPES:
+        return None
+    return db.scalar(
+        select(ChannelConnector).where(
+            ChannelConnector.tenant_id == conversation.tenant_id,
+            ChannelConnector.channel_id == conversation.channel_id,
+            ChannelConnector.status == "ready",
+        )
+    )
+
+
+def _create_agent_reply_delivery_job(
+    db: Session,
+    *,
+    conversation: Conversation,
+    message: Message,
+    principal: CurrentPrincipal,
+) -> tuple[int | None, int | None]:
+    connector = _ready_external_connector(db, conversation)
+    if connector is None:
+        return None, None
+    now = utc_now()
+    draft = OutboxDraft(
+        tenant_id=conversation.tenant_id,
+        conversation_id=conversation.id,
+        channel_id=conversation.channel_id,
+        contact_id=conversation.contact_id,
+        source_message_id=message.id,
+        status="ready_to_send",
+        delivery_status="not_sent",
+        reply_text=message.content,
+        idempotency_key=f"agent-reply:{message.id}:outbox-draft:v1",
+        confirmation_note="坐席人工回复进入官方渠道外发队列。",
+        created_by_id=principal.user.id,
+        confirmed_by_id=principal.user.id,
+        created_at=now,
+        updated_at=now,
+        confirmed_at=now,
+    )
+    db.add(draft)
+    db.flush()
+    job = OutboxDeliveryJob(
+        tenant_id=conversation.tenant_id,
+        outbox_draft_id=draft.id,
+        channel_id=conversation.channel_id,
+        connector_id=connector.id,
+        status="queued",
+        priority=5,
+        attempts_count=0,
+        max_attempts=3,
+        locked_by="",
+        locked_at=None,
+        next_run_at=now,
+        idempotency_key=f"agent-reply:{message.id}:delivery-job:v1",
+        external_write_requested=True,
+        external_write_permitted=False,
+        created_by_id=principal.user.id,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(job)
+    db.flush()
+    return draft.id, job.id
 
 
 def _build_inbox_item(db: Session, conversation: Conversation, now: datetime) -> ConversationInboxItemRead:
@@ -542,6 +614,12 @@ def create_agent_reply(
     conversation.last_message_at = now
     db.add(message)
     db.flush()
+    external_outbox_draft_id, external_delivery_job_id = _create_agent_reply_delivery_job(
+        db,
+        conversation=conversation,
+        message=message,
+        principal=principal,
+    )
     close_message_id = None
     if payload.close_conversation:
         conversation.status = "closed"
@@ -563,12 +641,25 @@ def create_agent_reply(
                     "message_id": message.id,
                     "close_message_id": close_message_id,
                     "close_conversation": payload.close_conversation,
-                    "external_write": True,
+                    "external_write": external_delivery_job_id is not None,
+                    "outbox_draft_id": external_outbox_draft_id,
+                    "delivery_job_id": external_delivery_job_id,
                 },
                 ensure_ascii=False,
             ),
         )
     )
     db.commit()
+    if external_delivery_job_id is not None:
+        run_outbox_delivery_queue(
+            db,
+            tenant_id=conversation.tenant_id,
+            payload=OutboxDeliveryQueueRunCreate(
+                batch_size=1,
+                rate_limit_per_minute=1,
+                worker_id=f"agent-reply-inline-sender-{message.id}",
+            ),
+            principal=principal,
+        )
     db.refresh(message)
     return message

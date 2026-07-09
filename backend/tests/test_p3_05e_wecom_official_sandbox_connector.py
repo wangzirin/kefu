@@ -5,6 +5,8 @@ import time
 
 from Crypto.Cipher import AES
 
+from app.models import OutboxDraft
+from app.services.channel_senders import _wechat_external_user_id
 from test_channel_connectors_api import _bootstrap_owner, _create_connector
 
 
@@ -178,8 +180,8 @@ def test_wecom_official_xml_message_decrypts_and_creates_trusted_inbound_message
     assert detail["messages"][0]["external_message_id"] == "wecom-p3-05e-message-001"
 
     receipts = client.get(f"/api/channels/{channel['id']}/delivery-receipts", headers=headers).json()
-    assert len(receipts) == 1
-    stored = receipts[0]["raw_payload"]
+    assert len(receipts) >= 1
+    stored = next(item["raw_payload"] for item in receipts if item["verification_status"] == "signature_validated")
     assert stored["webhook_intake"]["secret_status"] == "env_configured"
     assert stored["webhook_intake"]["official_xml_decrypted"] is True
     assert stored["webhook_intake"]["signature_values_stored"] is False
@@ -190,10 +192,10 @@ def test_wecom_official_xml_message_decrypts_and_creates_trusted_inbound_message
 
     workflow_res = client.get(f"/api/tenants/{tenant['id']}/workflow-runs", headers=headers)
     assert workflow_res.status_code == 200
-    assert workflow_res.json() == []
+    assert workflow_res.json()
 
 
-def test_wechat_kf_manual_connector_url_verification_and_message_enters_service_desk(client, monkeypatch, tmp_path) -> None:
+def test_wechat_kf_manual_connector_url_verification_and_message_enters_service_desk(client, monkeypatch, tmp_path, db_session) -> None:
     monkeypatch.setattr(
         "app.services.channel_secret_store._secret_store_path",
         lambda: tmp_path / "local_channel_secrets.json",
@@ -229,6 +231,8 @@ def test_wechat_kf_manual_connector_url_verification_and_message_enters_service_
             "secrets": {
                 "token": TEST_TOKEN,
                 "encoding_aes_key": TEST_ENCODING_AES_KEY,
+                "corp_id": TEST_RECEIVER_ID,
+                "open_kfid": "kf-test-open-kfid",
                 "app_secret": "wechat-kf-secret-only-for-test",
             }
         },
@@ -295,8 +299,34 @@ def test_wechat_kf_manual_connector_url_verification_and_message_enters_service_
     assert "我想咨询微信客服接入测试" in contents
     assert detail["messages"][0]["external_message_id"] == "wechat-kf-message-001"
 
+    claim_res = client.post(f"/api/conversations/{event['parsed_event']['conversation_id']}/claim", headers=headers)
+    assert claim_res.status_code == 200
+    reply_res = client.post(
+        f"/api/conversations/{event['parsed_event']['conversation_id']}/agent-replies",
+        headers=headers,
+        json={"content": "您好，我来帮您处理"},
+    )
+    assert reply_res.status_code == 201
+    assert reply_res.json()["sender_type"] == "agent"
+    drafts_res = client.get(f"/api/tenants/{tenant['id']}/outbox-drafts", headers=headers)
+    assert drafts_res.status_code == 200
+    agent_draft = next(item for item in drafts_res.json() if item["source_message_id"] == reply_res.json()["id"])
+    db_session.expire_all()
+    draft_row = db_session.get(OutboxDraft, agent_draft["id"])
+    assert draft_row is not None
+    assert _wechat_external_user_id(db_session, draft_row) == "external-wechat-kf-user-001"
+    jobs_res = client.get(f"/api/tenants/{tenant['id']}/outbox-delivery-jobs", headers=headers)
+    assert jobs_res.status_code == 200
+    agent_job = next(item for item in jobs_res.json() if item["outbox_draft_id"] == agent_draft["id"])
+    assert agent_job["status"] == "blocked"
+    attempts_res = client.get(f"/api/outbox-drafts/{agent_draft['id']}/send-attempts", headers=headers)
+    assert attempts_res.status_code == 200
+    [attempt] = attempts_res.json()
+    assert attempt["status"] == "blocked"
+    assert attempt["response_payload"]["blocked_reason"] == "external_write_kill_switch"
+
     receipts = client.get(f"/api/channels/{channel['id']}/delivery-receipts", headers=headers).json()
-    stored = receipts[0]["raw_payload"]
+    stored = next(item["raw_payload"] for item in receipts if item["verification_status"] == "signature_validated")
     assert stored["webhook_intake"]["official_xml_decrypted"] is True
     assert stored["webhook_intake"]["signature_values_stored"] is False
     assert signature not in str(stored)

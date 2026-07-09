@@ -91,7 +91,7 @@ backend\.venv\Scripts\pip install -r backend\requirements.txt
 ```powershell
 cd backend
 .\.venv\Scripts\python -m alembic -c alembic.ini upgrade head
-.\.venv\Scripts\python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8081
+.\.venv\Scripts\python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 另开一个终端启动前端：
@@ -104,7 +104,7 @@ npm --prefix frontend run dev
 
 ```text
 前端：http://127.0.0.1:5173
-后端：http://127.0.0.1:8081/health
+后端：http://127.0.0.1:8000/health
 ```
 
 ## 当前推荐验证命令

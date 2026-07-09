@@ -26,9 +26,12 @@ frontend/dist/
 frontend/.vite/
 
 # Local data and smoke-test artifacts
+.tools/
+backend/data/local_channel_secrets.json
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+output/
 output/**/*.db
 output/**/*.sqlite
 output/**/*.sqlite3

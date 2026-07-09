@@ -44,7 +44,7 @@ def test_channel_provider_registry_exposes_official_skeleton_contracts(client) -
     assert providers["wecom"]["verification_contract"]["requires_secret_store"] is True
     assert providers["wecom"]["verification_contract"]["production_status"] == "official_sandbox_inbound_only"
     assert providers["wecom"]["verification_contract"]["validated_in_current_stage"] is True
-    assert providers["wecom"]["capabilities"]["external_write_enabled"] is False
+    assert providers["wecom"]["capabilities"]["external_write_enabled"] is True
 
 
 def test_official_webhook_intake_records_untrusted_receipt_without_bearer_token(client) -> None:
@@ -209,7 +209,9 @@ def test_verified_wecom_message_webhook_creates_trusted_inbound_message(client) 
 
     workflow_res = client.get(f"/api/tenants/{tenant['id']}/workflow-runs", headers=headers)
     assert workflow_res.status_code == 200
-    assert workflow_res.json() == []
+    workflows = workflow_res.json()
+    assert len(workflows) == 1
+    assert workflows[0]["trigger_message_id"] == event["parsed_event"]["trusted_message_id"]
 
     audit_res = client.get(f"/api/tenants/{tenant['id']}/audit-events", headers=headers)
     actions = [item["action"] for item in audit_res.json()]

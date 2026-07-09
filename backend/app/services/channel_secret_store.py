@@ -137,7 +137,12 @@ def resolve_local_connector_secret_value(*, credential_ref: str, secret_key: str
         return ""
 
 
-def _resolve_local_secret_material(*, provider: str, credential_ref: str) -> WebhookSecretResolution:
+def _resolve_local_secret_material(
+    *,
+    provider: str,
+    credential_ref: str,
+    public_config: dict[str, Any] | None = None,
+) -> WebhookSecretResolution:
     encrypted = _read_local_secret_store().get(credential_ref)
     if not isinstance(encrypted, dict):
         return WebhookSecretResolution(status="reference_unresolved", detail="local credential_ref is missing")
@@ -154,7 +159,13 @@ def _resolve_local_secret_material(*, provider: str, credential_ref: str) -> Web
         app_secret=secrets.get("app_secret", "") or secrets.get("secret", ""),
         open_kfid=secrets.get("open_kfid", "") or secrets.get("kf_id", ""),
         webhook_signing_secret=secrets.get("webhook_signing_secret", "") or secrets.get("signing_secret", ""),
-        receiver_id=secrets.get("receiver_id", "") or secrets.get("corp_id", "") or secrets.get("app_id", ""),
+        receiver_id=(
+            secrets.get("receiver_id", "")
+            or secrets.get("corp_id", "")
+            or secrets.get("app_id", "")
+            or str((public_config or {}).get("corp_id") or "").strip()
+            or str((public_config or {}).get("receiver_id") or "").strip()
+        ),
         source="local_encrypted",
     )
     missing_fields: list[str] = []
@@ -246,7 +257,7 @@ def resolve_webhook_secret_material(
     if credential_ref.startswith("env:"):
         return _resolve_env_secret_material(provider=provider, credential_ref=credential_ref)
     if credential_ref.startswith("local:"):
-        return _resolve_local_secret_material(provider=provider, credential_ref=credential_ref)
+        return _resolve_local_secret_material(provider=provider, credential_ref=credential_ref, public_config=public_config)
     material = _WEBHOOK_SECRET_FIXTURES.get(credential_ref)
     if material is None:
         return WebhookSecretResolution(

@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Channel, ChannelConnector, Conversation, Message, OutboxDraft
+from app.models import Channel, ChannelConnector, Contact, Conversation, Message, OutboxDraft
 from app.models.foundation import utc_now
 from app.services.channel_provider_registry import normalize_provider
 from app.services.channel_secret_store import resolve_webhook_secret_material
@@ -58,6 +58,13 @@ def _website_send(db: Session, *, draft: OutboxDraft, connector: ChannelConnecto
 
 
 def _wechat_external_user_id(db: Session, draft: OutboxDraft) -> str:
+    contact = db.get(Contact, draft.contact_id)
+    if contact is not None and contact.wechat:
+        provider_prefix, separator, external_id = contact.wechat.partition(":")
+        if separator and normalize_provider(provider_prefix) in {"wechat_kf", "wecom"} and external_id:
+            return external_id
+        if not separator:
+            return contact.wechat
     source = db.get(Message, draft.source_message_id) if draft.source_message_id else None
     if source and source.external_message_id:
         return source.external_message_id

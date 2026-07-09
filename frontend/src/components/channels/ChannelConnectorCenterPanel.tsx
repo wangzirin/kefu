@@ -130,10 +130,6 @@ interface ChannelBoundaryRequirement {
 
 type ChannelEntryId = "website" | "wechat_kf" | "wecom" | "wechat_official" | "wechat_miniapp";
 
-const FIXED_WECOM_CALLBACK_TOKEN = "ArWq3t0YELg1ymY1kzLzjam3";
-const FIXED_WECOM_CALLBACK_ENCODING_AES_KEY = "TzW0PufTBLQdaBPD9i8FJH00nCSn1LyvzELFAdK1yLG";
-const FIXED_WECOM_CALLBACK_URL = "https://spears-bras-loved-resulting.trycloudflare.com/wecom/callback";
-
 interface ChannelAccessComponent {
   id: string;
   name: string;
@@ -192,7 +188,7 @@ interface ManualConnectorField {
   readonly?: boolean;
   readonlyValue?: string;
   systemGenerated?: boolean;
-  secretKey?: "token" | "encoding_aes_key" | "app_secret" | "webhook_signing_secret";
+  secretKey?: "token" | "encoding_aes_key" | "app_secret" | "open_kfid" | "webhook_signing_secret";
 }
 
 export function ChannelConnectorCenterPanel({
@@ -274,6 +270,7 @@ export function ChannelConnectorCenterPanel({
     token: "",
     encodingAesKey: "",
     appSecret: "",
+    openKfid: "",
     webhookSigningSecret: ""
   });
   const [manualConnectorDraft, setManualConnectorDraft] = useState<ManualConnectorDraft>({});
@@ -402,10 +399,11 @@ export function ChannelConnectorCenterPanel({
         token: secretDraft.token,
         encoding_aes_key: secretDraft.encodingAesKey,
         app_secret: secretDraft.appSecret,
+        open_kfid: secretDraft.openKfid,
         webhook_signing_secret: secretDraft.webhookSigningSecret
       };
       await onSaveSecrets(Number(accountDraft.channelId), secrets);
-      setSecretDraft({ token: "", encodingAesKey: "", appSecret: "", webhookSigningSecret: "" });
+      setSecretDraft({ token: "", encodingAesKey: "", appSecret: "", openKfid: "", webhookSigningSecret: "" });
       setConnectorActionState({ status: "success", message: "密钥已保存，页面不会回显明文。" });
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : "保存密钥失败";
@@ -444,6 +442,8 @@ export function ChannelConnectorCenterPanel({
           result.encoding_aes_key = secretDraft.encodingAesKey;
         } else if (field.secretKey === "app_secret") {
           result.app_secret = secretDraft.appSecret;
+        } else if (field.secretKey === "open_kfid") {
+          result.open_kfid = secretDraft.openKfid;
         } else if (field.secretKey === "webhook_signing_secret") {
           result.webhook_signing_secret = secretDraft.webhookSigningSecret;
         }
@@ -478,13 +478,14 @@ export function ChannelConnectorCenterPanel({
         typeof publicConfig.agent_id === "string" && publicConfig.agent_id.trim()
           ? publicConfig.agent_id.trim()
           : "";
+      const externalAccountId = activeEntry.id === "wechat_kf" ? secretDraft.openKfid.trim() : agentId;
       await onConfigureChannelAccount(Number(accountDraft.channelId), {
         provider,
         platform: activeEntry.label,
         account_name: activeEntry.id === "wecom" ? "企业微信自建应用" : `${activeEntry.label}账号`,
-        external_account_id: agentId,
+        external_account_id: externalAccountId,
         store_name: enterpriseName,
-        entrypoint_name: activeEntry.id === "wecom" ? "自建应用回调" : "手动接入回调",
+        entrypoint_name: activeEntry.id === "wechat_kf" ? "微信客服手动接入" : activeEntry.id === "wecom" ? "自建应用回调" : "手动接入回调",
         authorization_status: "manual_configured",
         access_status: verification.status === "verified" ? "connected" : "sandbox_configuring",
         reply_mode: "human_review_first",
@@ -614,24 +615,12 @@ export function ChannelConnectorCenterPanel({
       }
       return;
     }
-    if (!nextChannelId || !onStartAuthorization) {
-      setConnectorActionState({ status: "error", message: "请先选择租户渠道，再发起扫码授权。" });
-      setChannelUiNotice("请在弹窗里选择租户渠道。");
-      return;
-    }
-    setConnectorActionState({ status: "saving", message: "正在创建扫码授权会话..." });
-    try {
-      const authorization = await onStartAuthorization(Number(nextChannelId), provider, connectMode);
-      setConnectorActionState({
-        status: "success",
-        message: `授权入口已生成：${authorization.authorization_url}`
-      });
-      setChannelUiNotice("扫码授权入口已生成，完成授权后请回到此页保存/验证配置。");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "创建扫码授权失败";
-      setConnectorActionState({ status: "error", message });
-      setChannelUiNotice(message);
-    }
+    setConnectorActionState({
+      status: "success",
+      message: "扫码接入需要先配置微信客服服务商第三方平台授权应用；当前请使用手动接入完成绑定。"
+    });
+    setChannelUiNotice("扫码接入待服务商授权应用开通，手动接入现在可以完成绑定。");
+    return;
   }
 
   const activeEntry = CHANNEL_ENTRY_DEFINITIONS.find((entry) => entry.id === activeChannelId) ?? CHANNEL_ENTRY_DEFINITIONS[0];
@@ -770,14 +759,6 @@ export function ChannelConnectorCenterPanel({
       setSecretDraft((current) => ({
         ...current,
         webhookSigningSecret: current.webhookSigningSecret || generateConnectorSecret("whsec", 32)
-      }));
-      return;
-    }
-    if (entryId === "wecom") {
-      setSecretDraft((current) => ({
-        ...current,
-        token: FIXED_WECOM_CALLBACK_TOKEN,
-        encodingAesKey: FIXED_WECOM_CALLBACK_ENCODING_AES_KEY
       }));
       return;
     }
@@ -1195,7 +1176,13 @@ export function ChannelConnectorCenterPanel({
             <header className="miduoke-modal-head">
               <div>
                 <h2>{activeEntry.label}{connectorGuide.mode === "qr" ? "扫码接入" : "手动接入"}</h2>
-                <p>{connectorGuide.mode === "qr" ? "按授权入口完成扫码后，回到这里验证配置和测试入站消息。" : "按字段提示填写配置，保存密钥后验证配置。密钥不会回显。"}</p>
+                <p>
+                  {connectorGuide.mode === "qr"
+                    ? "扫码接入需要先开通服务商第三方平台授权应用；当前可用手动接入完成绑定。"
+                    : activeEntry.id === "wechat_kf"
+                      ? "按三步复制和回填微信客服配置：先填企业信息，再复制 URL、Token、EncodingAESKey 到微信客服后台，最后回填 Secret 并验证。"
+                      : "按字段提示填写配置，保存密钥后验证配置。密钥不会回显。"}
+                </p>
               </div>
               <button type="button" className="miduoke-icon-button" aria-label="关闭" onClick={() => setConnectorGuide(null)}>
                 <X size={18} />
@@ -1211,32 +1198,32 @@ export function ChannelConnectorCenterPanel({
               ) : null}
 
               {connectorGuide.mode === "qr" ? (
-                <div className="wide channel-account-state-note success" data-channel-authorization-guide="qr">
-                  <strong>{connectorAuthorization ? "扫码授权入口" : "等待生成扫码授权入口"}</strong>
-                  <small>{connectorAuthorization ? `过期时间 ${formatShortDate(connectorAuthorization.expires_at)}` : "如果没有自动生成，请点击下方重新生成授权入口。"}</small>
-                  <code>{connectorAuthorization?.qr_payload || "选择渠道后生成授权入口"}</code>
+                <div className="wide channel-account-state-note" data-channel-authorization-guide="qr">
+                  <strong>扫码接入准备中</strong>
+                  <small>等服务商授权应用配置完成后，这里会直接展示企业微信管理员扫码授权入口；现在请先使用手动接入。</small>
+                  <code>当前可用：手动接入 {"->"} 填企业信息 {"->"} 复制回调配置 {"->"} 回填 Secret</code>
                   <div className="miduoke-website-preview" style={{ padding: 16 }}>
                     <div className="miduoke-preview-widget" style={{ width: 180, height: 180, alignItems: "center", justifyContent: "center" }}>
                       <strong>扫码授权</strong>
-                      <span>{connectorAuthorization ? "使用管理员微信扫码" : "授权入口待生成"}</span>
+                      <span>待服务商应用开通</span>
                     </div>
                   </div>
-                  {connectorAuthorization?.next_steps?.length ? (
-                    <ol>
-                      {connectorAuthorization.next_steps.map((step) => (
-                        <li key={step}>{step}</li>
-                      ))}
-                    </ol>
-                  ) : null}
+                  <ol>
+                    <li>准备已认证企业微信和超级管理员账号。</li>
+                    <li>开通微信客服 API 接入能力。</li>
+                    <li>服务商授权应用配置完成后，再由管理员扫码授权。</li>
+                  </ol>
                 </div>
               ) : (
                 <>
                   <div className="wide channel-account-state-note" data-channel-manual-fields="true">
-                    <strong>需要配置的字段</strong>
+                    <strong>{activeEntry.id === "wechat_kf" ? "手动接入三步" : "需要配置的字段"}</strong>
                     <small>
-                      {getManualConnectorFields(activeEntry.id, accountDraft.channelId || "{channel_id}")
-                        .map((field) => `${field.label}${field.required ? "*" : ""}`)
-                        .join("；")}
+                      {activeEntry.id === "wechat_kf"
+                        ? "1. 填企业简称和企业 ID；2. 复制 URL、Token、EncodingAESKey 到微信客服后台；3. 回填客服账号 ID 和 Secret 后保存验证。"
+                        : getManualConnectorFields(activeEntry.id, accountDraft.channelId || "{channel_id}")
+                            .map((field) => `${field.label}${field.required ? "*" : ""}`)
+                            .join("；")}
                     </small>
                   </div>
                   <div className="wide miduoke-manual-field-list">
@@ -1297,10 +1284,10 @@ export function ChannelConnectorCenterPanel({
                 <button
                   type="button"
                   className="miduoke-primary-button"
-                  onClick={() => void startConnectorAuthorization("qr", connectorGuide.component)}
+                  onClick={() => void startConnectorAuthorization("manual", connectorGuide.component)}
                   disabled={!hasToken || !canManageConnector || connectorActionState.status === "saving"}
                 >
-                  {connectorActionState.status === "saving" ? "生成中..." : "生成扫码授权"}
+                  使用手动接入
                 </button>
               ) : (
                 <>
@@ -2154,18 +2141,18 @@ function getChannelAccessNotes(id: ChannelEntryId) {
   const notes: Record<ChannelEntryId, string[]> = {
     website: [],
     wechat_kf: [
-      "*微信客服需要客户自行在微信后台取得 open_kfid、Token、EncodingAESKey 和 AppSecret",
-      "*米多客文档同时支持扫码授权和手动接入，本系统先保留两种入口",
+      "*微信客服需要客户在微信后台取得企业 ID、open_kfid 和 Secret；URL、Token、EncodingAESKey 由本系统生成后复制到微信后台",
+      "*本系统保留扫码授权和手动接入两种入口；当前优先使用手动接入完成绑定",
       "*验证通过前只生成草稿或转人工，不自动向微信外发"
     ],
-    wecom: ["*米多客文档同时支持扫码授权和手动接入；手动接入更适合独立部署企业"],
+    wecom: ["*本系统保留扫码授权和手动接入两种入口；手动接入更适合独立部署企业"],
     wechat_official: [
       "*你的公众号必须是认证过的微信订阅号或服务号，否则无法正常回复顾客对话",
       "*接入后，之前设置好的菜单、自动回复等功能仍然有效"
     ],
     wechat_miniapp: [
       "*接入前你的小程序需完成认证才能正常使用本功能",
-      "*接入后，所有小程序用户的客服消息会被转发到米多客"
+      "*接入后，所有小程序用户的客服消息会被转发到本系统"
     ]
   };
   return notes[id];
@@ -2174,7 +2161,7 @@ function getChannelAccessNotes(id: ChannelEntryId) {
 function getChannelConnectModeActions(entry: ChannelEntryDefinition) {
   return entry.connectModes.map((mode) => ({
     mode,
-    label: mode === "qr" ? "扫码接入（推荐）" : "手动接入"
+    label: mode === "qr" ? "扫码接入（待开通）" : "手动接入"
   }));
 }
 
@@ -2305,10 +2292,10 @@ function buildWebhookPath(id: ChannelEntryId, channelId: string | number) {
 function getSharedWechatCallbackUrl(id: ChannelEntryId) {
   const env = import.meta.env as Record<string, string | undefined>;
   if (id === "wechat_kf") {
-    return (env.VITE_WECHAT_KF_CALLBACK_URL || "https://wecom.hanxai.cn/wechat-kf/callback").replace(/\/$/, "");
+    return (env.VITE_WECHAT_KF_CALLBACK_URL || "").replace(/\/$/, "");
   }
   if (id === "wecom") {
-    return (env.VITE_WECOM_CALLBACK_URL || FIXED_WECOM_CALLBACK_URL).replace(/\/$/, "");
+    return (env.VITE_WECOM_CALLBACK_URL || "").replace(/\/$/, "");
   }
   return "";
 }
@@ -2338,18 +2325,18 @@ function getManualConnectorFields(id: ChannelEntryId, channelId: string | number
   const tokenField: ManualConnectorField = {
     name: "token",
     label: "Token",
-    placeholder: id === "wecom" ? "已固定到 local:wecom_callback，尾号 jam3" : "系统已生成，请复制到微信后台 Token",
+    placeholder: "系统已生成，请复制到微信后台 Token",
     kind: "secret",
-    required: id !== "wecom",
+    required: true,
     systemGenerated: true,
     secretKey: "token"
   };
   const aesField: ManualConnectorField = {
     name: "encoding_aes_key",
     label: "EncodingAESKey",
-    placeholder: id === "wecom" ? "已固定到 local:wecom_callback，尾号 yLG" : "系统已生成，请复制到微信后台 EncodingAESKey",
+    placeholder: "系统已生成，请复制到微信后台 EncodingAESKey",
     kind: "secret",
-    required: id !== "wecom",
+    required: true,
     systemGenerated: true,
     secretKey: "encoding_aes_key"
   };
@@ -2376,6 +2363,14 @@ function getManualConnectorFields(id: ChannelEntryId, channelId: string | number
     wechat_kf: [
       { name: "enterprise_name", label: "企业简称", placeholder: "在微信客服后台「企业信息」获取", kind: "public", required: true },
       { name: "corp_id", label: "企业 ID", placeholder: "例如 wwxxxxxxxxxxxx", kind: "public", required: true },
+      {
+        name: "open_kfid",
+        label: "客服账号 ID",
+        placeholder: "微信客服后台客服账号对应的 open_kfid",
+        kind: "secret",
+        required: true,
+        secretKey: "open_kfid"
+      },
       { name: "callback_url", label: "URL", placeholder: callbackUrl, kind: "public", required: true, readonly: true, readonlyValue: callbackUrl },
       tokenField,
       aesField,
@@ -2410,11 +2405,15 @@ function getManualConnectorFields(id: ChannelEntryId, channelId: string | number
   return definitions[id];
 }
 
-function getManualConnectorFieldValue(
-  field: ManualConnectorField,
-  publicDraft: ManualConnectorDraft,
-  secretDraft: { token: string; encodingAesKey: string; appSecret: string; webhookSigningSecret: string }
-) {
+type SecretDraft = {
+  token: string;
+  encodingAesKey: string;
+  appSecret: string;
+  openKfid: string;
+  webhookSigningSecret: string;
+};
+
+function getManualConnectorFieldValue(field: ManualConnectorField, publicDraft: ManualConnectorDraft, secretDraft: SecretDraft) {
   if (field.readonly) {
     return field.readonlyValue ?? "";
   }
@@ -2430,6 +2429,9 @@ function getManualConnectorFieldValue(
   if (field.secretKey === "app_secret") {
     return secretDraft.appSecret;
   }
+  if (field.secretKey === "open_kfid") {
+    return secretDraft.openKfid;
+  }
   if (field.secretKey === "webhook_signing_secret") {
     return secretDraft.webhookSigningSecret;
   }
@@ -2439,7 +2441,7 @@ function getManualConnectorFieldValue(
 function updateSecretDraftByKey(
   key: ManualConnectorField["secretKey"],
   value: string,
-  setSecretDraft: Dispatch<SetStateAction<{ token: string; encodingAesKey: string; appSecret: string; webhookSigningSecret: string }>>
+  setSecretDraft: Dispatch<SetStateAction<SecretDraft>>
 ) {
   setSecretDraft((current) => {
     if (key === "token") {
@@ -2450,6 +2452,9 @@ function updateSecretDraftByKey(
     }
     if (key === "app_secret") {
       return { ...current, appSecret: value };
+    }
+    if (key === "open_kfid") {
+      return { ...current, openKfid: value };
     }
     if (key === "webhook_signing_secret") {
       return { ...current, webhookSigningSecret: value };
@@ -2464,21 +2469,15 @@ function createGeneratedSecretDraft(entryId: ChannelEntryId) {
       token: "",
       encodingAesKey: "",
       appSecret: "",
+      openKfid: "",
       webhookSigningSecret: generateConnectorSecret("whsec", 32)
-    };
-  }
-  if (entryId === "wecom") {
-    return {
-      token: FIXED_WECOM_CALLBACK_TOKEN,
-      encodingAesKey: FIXED_WECOM_CALLBACK_ENCODING_AES_KEY,
-      appSecret: "",
-      webhookSigningSecret: ""
     };
   }
   return {
     token: generateConnectorSecret("mdk", 24),
     encodingAesKey: generateEncodingAesKey(),
     appSecret: "",
+    openKfid: "",
     webhookSigningSecret: ""
   };
 }
@@ -2551,10 +2550,10 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
     subtitle: "客服链接 / 微信内咨询",
     description: "客户自行在微信客服后台配置回调和密钥后，可把咨询消息接入本工作台；默认先进入草稿或人工确认。",
     componentQuota: 2,
-    setupHint: "请先准备 open_kfid、Token、EncodingAESKey 和 AppSecret，再在系统内保存配置。",
+    setupHint: "请先准备企业 ID、open_kfid 和 Secret；URL、Token、EncodingAESKey 可在本系统复制。",
     primaryAction: "配置微信客服",
     secondaryAction: "查看回调地址",
-    connectModes: ["qr", "manual"],
+    connectModes: ["manual", "qr"],
     components: [
       {
         id: "wechat-kf-link",
@@ -2587,7 +2586,7 @@ const CHANNEL_ENTRY_DEFINITIONS: ChannelEntryDefinition[] = [
     setupHint: "当前先完成自助配置和入站测试，真实外发需要白名单验收。",
     primaryAction: "配置企业微信",
     secondaryAction: "回调配置",
-    connectModes: ["qr", "manual"],
+    connectModes: ["manual", "qr"],
     components: [
       {
         id: "wecom-service-link",
@@ -3004,21 +3003,20 @@ function buildChannelConnectorCards({
   ).length;
   const failureCount = failureReviews.filter((item) => item.status === "open").length;
   const callbackVerified = inboundSucceeded;
-  const wecomFixedCallbackConfigured = true;
   const callbackBlocker = callbackVerified ? "等待白名单发送测试" : "等待企业微信后台发起 URL 验证";
 
   const wecom: ChannelConnectorCard = {
     id: "wecom-servicer",
     name: "企业微信 / 微信客服",
     category: "第一优先级",
-    status: callbackVerified ? "入站链路已产生样例" : "回调 URL 与密钥已固定",
+    status: callbackVerified ? "入站链路已产生样例" : "等待自助填写绑定字段",
     tone: callbackVerified ? "warning" : "urgent",
     summary: "用于微信内客服入口、客服链接或二维码。当前只进入转人工和待确认回复流程，不自动写回外部平台。",
     currentBlocker: callbackBlocker,
     officialPath: "企业微信管理后台 -> 应用管理 -> 微信客服 -> 可调用接口的应用 -> 选择企业内部开发或授权应用后配置回调。",
     nextAction: callbackVerified
       ? "继续做白名单发送测试，确认访问凭证、可信 IP、外发开关和转人工放行都成立。"
-      : "企业微信后台已可使用固定 URL、Token 和 EncodingAESKey 发起 URL 验证；真实外发仍关闭。",
+      : "打开微信客服手动接入，复制系统生成的 URL、Token 和 EncodingAESKey 到微信客服后台，再回填 Secret 后验证。",
     steps: [
       {
         label: "未配置",
@@ -3045,16 +3043,16 @@ function buildChannelConnectorCards({
         evidence: "仅用于白名单测试"
       },
       {
-        label: "回调 URL 已固定",
-        description: "把我们提供的公网 HTTPS 回调地址填入企业微信后台。",
-        status: callbackVerified || wecomFixedCallbackConfigured ? "done" : "blocked",
-        evidence: callbackVerified ? "已有入站处理记录" : FIXED_WECOM_CALLBACK_URL
+        label: "回调 URL 已生成",
+        description: "从接入向导复制公网 HTTPS 回调地址，填入微信客服后台。",
+        status: callbackVerified ? "done" : "pending",
+        evidence: callbackVerified ? "已有入站处理记录" : "手动接入向导中复制"
       },
       {
         label: "等待 URL 验证",
         description: "平台会向 URL 发起验证请求，后端必须完成签名校验、AES 解密和 XML 解析。",
         status: callbackVerified ? "done" : "pending",
-        evidence: callbackVerified ? `worker 成功 ${workerRun?.succeeded ?? 0} 条` : "Token 与 EncodingAESKey 已固定"
+        evidence: callbackVerified ? `worker 成功 ${workerRun?.succeeded ?? 0} 条` : "Token 与 EncodingAESKey 由系统生成"
       },
       {
         label: "已收到入站消息",
@@ -3084,22 +3082,22 @@ function buildChannelConnectorCards({
     config: [
       {
         label: "公网 HTTPS 回调 URL",
-        status: callbackVerified ? "已产生入站样例" : "已固定，待企微后台验证",
-        value: FIXED_WECOM_CALLBACK_URL,
-        note: "当前用于企微 URL 验证；正式外发能力仍保持关闭。"
+        status: callbackVerified ? "已产生入站样例" : "在手动接入向导中复制",
+        value: "按所选渠道生成 /api/webhooks/wechat-kf/channels/{channel_id}",
+        note: "用于微信客服后台 URL 验证；正式外发能力仍保持关闭。"
       },
       {
         label: "Token",
-        status: "已固定到本地密钥",
-        value: "local:wecom_callback/token · 尾号 jam3",
-        note: "已换成你提供的 Token；前端不展示完整明文。",
+        status: "由系统生成",
+        value: "手动接入向导中复制",
+        note: "复制到微信客服后台 Token；保存后前端不回显完整明文。",
         sensitive: true
       },
       {
         label: "EncodingAESKey",
-        status: "已固定到本地密钥",
-        value: "local:wecom_callback/encoding_aes_key · 尾号 yLG",
-        note: "已换成你提供的 EncodingAESKey；用于企微 URL 验证和消息解密。",
+        status: "由系统生成",
+        value: "手动接入向导中复制",
+        note: "复制到微信客服后台 EncodingAESKey；用于 URL 验证和消息解密。",
         sensitive: true
       },
       {
@@ -3131,7 +3129,7 @@ function buildChannelConnectorCards({
       id: "wechat-kf",
       name: "微信客服",
       summary: "客户在微信客服后台配置回调和凭据，系统只保存脱敏状态并做验证。",
-      prerequisites: ["open_kfid 和企业主体", "Token、EncodingAESKey、AppSecret", "回调地址验证条件"],
+      prerequisites: ["企业主体和 open_kfid", "系统生成的 Token、EncodingAESKey", "微信客服后台生成的 Secret"],
       nextAction: "网站闭环后填写微信客服配置并做入站测试。"
     },
     {
