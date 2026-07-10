@@ -3029,6 +3029,31 @@ export async function listTenantChannels(tenantId: string | number, token: strin
   return requestJson<Channel[]>(`/api/tenants/${tenantId}/channels`, {}, token);
 }
 
+export async function createTenantChannel(
+  tenantId: string | number,
+  token: string,
+  payload: {
+    type: string;
+    name: string;
+    reply_mode?: string;
+    status?: string;
+  }
+): Promise<Channel> {
+  return requestJson<Channel>(
+    `/api/tenants/${tenantId}/channels`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        type: payload.type,
+        name: payload.name,
+        reply_mode: payload.reply_mode ?? "assist",
+        status: payload.status ?? "planned"
+      })
+    },
+    token
+  );
+}
+
 export async function listTenantUsers(tenantId: string | number, token: string): Promise<AccountUser[]> {
   return requestJson<AccountUser[]>(`/api/tenants/${tenantId}/users`, {}, token);
 }

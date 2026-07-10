@@ -15,6 +15,7 @@ export default function ChannelsPage({ ctx }: WorkspacePageProps) {
       hasToken={Boolean(ctx.auth.token)}
       canManageConnector={ctx.canManageChannelConnector}
       tenantId={ctx.auth.user.tenant.id}
+      onCreateTenantChannel={(payload: { type: string; name: string; reply_mode?: string; status?: string }) => ctx.handleCreateTenantChannel(payload)}
       onConfigureChannelAccount={(channelId: number, payload: any) => ctx.handleConfigureChannelAccount(channelId, payload)}
       onDeleteChannelAccount={(accountId: number) => ctx.handleDeleteChannelAccountConnection(accountId)}
       onConfigureConnector={(channelId: number, provider: string, publicConfig?: Record<string, unknown>) =>

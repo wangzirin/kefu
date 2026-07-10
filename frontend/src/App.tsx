@@ -50,6 +50,7 @@ import {
   createDiagnosticRemediationRequest,
   createDiagnosticRemediationUpdatePlan,
   createTenantUser,
+  createTenantChannel,
   createKnowledgeEvaluationSet,
   createLocalBackupRestoreDryRun,
   createBusinessObject,
@@ -5775,6 +5776,15 @@ export function App() {
     return account;
   }
 
+  async function handleCreateTenantChannel(payload: { type: string; name: string; reply_mode?: string; status?: string }) {
+    if (auth.status !== "ready" || !auth.token) {
+      throw new Error("需要正式登录后才能创建渠道");
+    }
+    const channel = await createTenantChannel(auth.user.tenant.id, auth.token, payload);
+    await refreshChannelAccounts(auth.user.tenant.id, auth.token);
+    return channel;
+  }
+
   async function handleDeleteChannelAccountConnection(accountId: number) {
     if (auth.status !== "ready" || !auth.token || !hasPermission(auth.user, PERMISSIONS.channelConnectorManage)) {
       throw new Error("当前账号无权删除渠道接入");
@@ -6935,6 +6945,7 @@ export function App() {
     handleBulkDeleteKnowledgeDocuments,
     handleBulkUpdateKnowledgeDocuments,
     handleConfigureChannelAccount,
+    handleCreateTenantChannel,
     handleDeleteChannelAccountConnection,
     handleConfigureChannelConnector,
     handleConfirmDraft,

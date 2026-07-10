@@ -203,6 +203,7 @@ export function ChannelConnectorCenterPanel({
   hasToken,
   canManageConnector,
   onConfigureChannelAccount,
+  onCreateTenantChannel,
   onDeleteChannelAccount,
   onConfigureConnector,
   onStartAuthorization,
@@ -224,6 +225,7 @@ export function ChannelConnectorCenterPanel({
   hasToken: boolean;
   canManageConnector: boolean;
   onConfigureChannelAccount: (channelId: number, payload: ChannelAccountPayload) => Promise<ChannelAccount>;
+  onCreateTenantChannel?: (payload: { type: string; name: string; reply_mode?: string; status?: string }) => Promise<Channel>;
   onDeleteChannelAccount?: (accountId: number) => Promise<unknown>;
   onConfigureConnector?: (channelId: number, provider: string, publicConfig?: Record<string, unknown>) => Promise<ChannelConnectorConfig>;
   onStartAuthorization?: (channelId: number, provider: string, connectMode: "qr" | "manual") => Promise<ChannelConnectorAuthorization>;
@@ -414,8 +416,8 @@ export function ChannelConnectorCenterPanel({
     }
   }
 
-  function buildManualPublicConfig(entryId: ChannelEntryId) {
-    const fields = getManualConnectorFields(entryId, accountDraft.channelId || "{channel_id}");
+  function buildManualPublicConfig(entryId: ChannelEntryId, channelId: string | number = accountDraft.channelId || "{channel_id}") {
+    const fields = getManualConnectorFields(entryId, channelId);
     const result: Record<string, unknown> = {
       self_service_configured: true,
       external_write: "disabled",
@@ -430,8 +432,8 @@ export function ChannelConnectorCenterPanel({
     return result;
   }
 
-  function buildManualSecrets(entryId: ChannelEntryId) {
-    const fields = getManualConnectorFields(entryId, accountDraft.channelId || "{channel_id}");
+  function buildManualSecrets(entryId: ChannelEntryId, channelId: string | number = accountDraft.channelId || "{channel_id}") {
+    const fields = getManualConnectorFields(entryId, channelId);
     const result: Record<string, string> = {};
     fields
       .filter((field) => field.kind === "secret")
@@ -451,25 +453,59 @@ export function ChannelConnectorCenterPanel({
     return result;
   }
 
+  async function ensureTenantChannelForEntry(entryId: ChannelEntryId): Promise<number | null> {
+    if (accountDraft.channelId) {
+      return Number(accountDraft.channelId);
+    }
+    const preferred = findPreferredTenantChannel(entryId);
+    if (preferred) {
+      setAccountDraft((current) => ({ ...current, channelId: String(preferred.id) }));
+      return preferred.id;
+    }
+    if (!onCreateTenantChannel) {
+      setConnectorActionState({ status: "error", message: "当前页面未接入自动创建渠道接口，请先创建租户渠道。" });
+      return null;
+    }
+    const provider = normalizeProviderForChannelEntry(entryId);
+    setConnectorActionState({ status: "saving", message: `正在创建${activeEntry.label}渠道...` });
+    const channel = await onCreateTenantChannel({
+      type: provider,
+      name: activeEntry.label,
+      reply_mode: "assist",
+      status: "planned"
+    });
+    setAccountDraft((current) => ({
+      ...current,
+      channelId: String(channel.id),
+      provider,
+      platform: activeEntry.label,
+      storeName: current.storeName || activeEntry.label
+    }));
+    return channel.id;
+  }
+
   async function saveManualConnectorAndVerify() {
-    if (!accountDraft.channelId || !onConfigureConnector || !onSaveSecrets || !onVerifyConnector) {
-      setConnectorActionState({ status: "error", message: "请先选择租户渠道，当前页面需要保存与验证接口。" });
+    if (!onConfigureConnector || !onSaveSecrets || !onVerifyConnector) {
+      setConnectorActionState({ status: "error", message: "当前页面需要保存与验证接口。" });
       return;
     }
     const provider = normalizeProviderForChannelEntry(accountDraft.provider || activeEntry.id);
-    const requiredMissing = getManualConnectorFields(activeEntry.id, accountDraft.channelId || "{channel_id}")
+    const initialChannelId = accountDraft.channelId || "{channel_id}";
+    const requiredMissing = getManualConnectorFields(activeEntry.id, initialChannelId)
       .filter((field) => field.required && !String(getManualConnectorFieldValue(field, manualConnectorDraft, secretDraft) || "").trim())
       .map((field) => field.label);
     if (requiredMissing.length > 0) {
       setConnectorActionState({ status: "error", message: `请先填写必填字段：${requiredMissing.join("、")}` });
       return;
     }
-    const publicConfig = buildManualPublicConfig(activeEntry.id);
     setConnectorActionState({ status: "saving", message: "正在保存手动接入配置..." });
     try {
-      await onConfigureConnector(Number(accountDraft.channelId), provider, publicConfig);
-      await onSaveSecrets(Number(accountDraft.channelId), buildManualSecrets(activeEntry.id));
-      const verification = await onVerifyConnector(Number(accountDraft.channelId));
+      const channelId = await ensureTenantChannelForEntry(activeEntry.id);
+      if (!channelId) return;
+      const publicConfig = buildManualPublicConfig(activeEntry.id, channelId);
+      await onConfigureConnector(channelId, provider, publicConfig);
+      await onSaveSecrets(channelId, buildManualSecrets(activeEntry.id, channelId));
+      const verification = await onVerifyConnector(channelId);
       const enterpriseName =
         typeof publicConfig.enterprise_name === "string" && publicConfig.enterprise_name.trim()
           ? publicConfig.enterprise_name.trim()
@@ -479,7 +515,7 @@ export function ChannelConnectorCenterPanel({
           ? publicConfig.agent_id.trim()
           : "";
       const externalAccountId = activeEntry.id === "wechat_kf" ? secretDraft.openKfid.trim() : agentId;
-      await onConfigureChannelAccount(Number(accountDraft.channelId), {
+      await onConfigureChannelAccount(channelId, {
         provider,
         platform: activeEntry.label,
         account_name: activeEntry.id === "wecom" ? "企业微信自建应用" : `${activeEntry.label}账号`,
@@ -568,7 +604,7 @@ export function ChannelConnectorCenterPanel({
       wechat_miniapp: ["wechat_miniapp", "miniapp"]
     };
     const allowed = new Set([provider, ...(aliases[entryId] ?? [])].map((item) => item.toLowerCase()));
-    return availableChannels.find((channel) => allowed.has(String(channel.type).toLowerCase())) ?? availableChannels[0] ?? null;
+    return availableChannels.find((channel) => allowed.has(String(channel.type).toLowerCase())) ?? null;
   }
 
   async function startConnectorAuthorization(connectMode: ChannelConnectMode, component: ChannelAccessComponent) {
@@ -599,8 +635,8 @@ export function ChannelConnectorCenterPanel({
     if (connectMode === "manual") {
       ensureSystemGeneratedConnectorSecrets(activeEntry.id);
       if (!nextChannelId || !onConfigureConnector) {
-        setConnectorActionState({ status: "error", message: "请先选择租户渠道，再保存手动接入连接器。" });
-        setChannelUiNotice("请在弹窗里选择租户渠道。");
+        setConnectorActionState({ status: "idle", message: "填写业务字段后，系统会自动创建租户渠道并保存连接器。" });
+        setChannelUiNotice("无需手动选择内部渠道；保存并验证时会自动创建对应渠道。");
         return;
       }
       setConnectorActionState({ status: "saving", message: "正在创建手动接入连接器..." });
