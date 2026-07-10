@@ -177,10 +177,6 @@ def _resolve_local_secret_material(
         if normalized_provider == "wechat_kf":
             if not material.receiver_id:
                 missing_fields.append("corp_id")
-            if not material.app_secret:
-                missing_fields.append("app_secret")
-            if not material.open_kfid:
-                missing_fields.append("open_kfid")
     elif normalized_provider == "website" and not material.webhook_signing_secret:
         missing_fields.append("webhook_signing_secret")
     if missing_fields:
@@ -222,12 +218,12 @@ def _resolve_env_secret_material(*, provider: str, credential_ref: str) -> Webho
         if not material.encoding_aes_key:
             missing_fields.append(f"{prefix}_ENCODING_AES_KEY")
     elif normalized_provider == "wechat_kf":
+        if not material.token:
+            missing_fields.append(f"{prefix}_TOKEN")
+        if not material.encoding_aes_key:
+            missing_fields.append(f"{prefix}_ENCODING_AES_KEY")
         if not material.receiver_id:
             missing_fields.append(f"{prefix}_CORP_ID")
-        if not material.app_secret:
-            missing_fields.append(f"{prefix}_SECRET")
-        if not material.open_kfid:
-            missing_fields.append(f"{prefix}_OPEN_KFID")
     elif normalized_provider == "website" and not material.webhook_signing_secret:
         missing_fields.append(f"{prefix}_WEBHOOK_SIGNING_SECRET")
     else:

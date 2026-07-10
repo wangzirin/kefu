@@ -259,7 +259,7 @@ def test_ai_service_status_and_connector_secrets_never_return_plaintext(client, 
     assert verification["secret_included"] is False
 
 
-def test_wechat_kf_manual_connector_requires_and_stores_open_kfid_without_plaintext(client, monkeypatch, tmp_path) -> None:
+def test_wechat_kf_manual_connector_matches_official_three_step_bind_without_open_kfid(client, monkeypatch, tmp_path) -> None:
     tenant, token = _bootstrap_owner(
         client,
         slug="wechat-kf-manual-bind",
@@ -296,7 +296,24 @@ def test_wechat_kf_manual_connector_requires_and_stores_open_kfid_without_plaint
 
     missing_res = client.post(f"/api/channels/{channel['id']}/connector-verification", headers=headers)
     assert missing_res.status_code == 200
-    assert "open_kfid" in missing_res.json()["missing_fields"]
+    assert set(missing_res.json()["missing_fields"]) == {"token", "encoding_aes_key", "app_secret"}
+
+    callback_secret_res = client.post(
+        f"/api/channels/{channel['id']}/connector-secrets",
+        headers=headers,
+        json={
+            "secrets": {
+                "token": "token-should-not-return",
+                "encoding_aes_key": "aes-should-not-return",
+            }
+        },
+    )
+    assert callback_secret_res.status_code == 200
+    assert callback_secret_res.json()["status"] == "configured"
+    callback_verification_res = client.post(f"/api/channels/{channel['id']}/connector-verification", headers=headers)
+    assert callback_verification_res.status_code == 200
+    assert callback_verification_res.json()["status"] == "missing_configuration"
+    assert callback_verification_res.json()["missing_fields"] == ["app_secret"]
 
     secret_res = client.post(
         f"/api/channels/{channel['id']}/connector-secrets",
@@ -306,7 +323,6 @@ def test_wechat_kf_manual_connector_requires_and_stores_open_kfid_without_plaint
                 "token": "token-should-not-return",
                 "encoding_aes_key": "aes-should-not-return",
                 "app_secret": "secret-should-not-return",
-                "open_kfid": "open-kfid-should-not-return",
             }
         },
     )
@@ -316,7 +332,6 @@ def test_wechat_kf_manual_connector_requires_and_stores_open_kfid_without_plaint
     assert secret_body["field_status"] == {
         "app_secret": "configured",
         "encoding_aes_key": "configured",
-        "open_kfid": "configured",
         "token": "configured",
     }
     assert "should-not-return" not in str(secret_body)
