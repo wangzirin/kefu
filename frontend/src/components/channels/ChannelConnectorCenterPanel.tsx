@@ -473,7 +473,7 @@ export function ChannelConnectorCenterPanel({
       type: provider,
       name: activeEntry.label,
       reply_mode: "assist",
-      status: "planned"
+      status: entryId === "wechat_kf" ? "active" : "planned"
     });
     setAccountDraft((current) => ({
       ...current,
