@@ -7,6 +7,7 @@ from Crypto.Cipher import AES
 
 from app.models import Channel, ChannelConnector, Contact, Conversation, Message, OutboxDraft
 from app.services.channel_senders import _wechat_external_user_id, _wechat_kf_send
+from app.services.trusted_inbound_messages import create_trusted_inbound_message_if_ready
 from app.services.wechat_kf_api import WechatKfApiResult
 from test_channel_connectors_api import _bootstrap_owner, _create_connector
 
@@ -443,6 +444,60 @@ def test_wechat_kf_notification_syncs_real_customer_message_once(client, monkeyp
     assert connector.public_config["open_kfid"] == "kf-sync-open-kfid"
     public_connector = client.get(f"/api/channels/{channel['id']}/connector-config", headers=headers).json()
     assert "wechat_kf_sync_cursor" not in public_connector["public_config"]
+
+
+def test_wechat_kf_new_message_after_close_creates_new_conversation(client, db_session) -> None:
+    tenant, _token = _bootstrap_owner(
+        client,
+        slug="wechat-kf-reopen-after-close",
+        email="wechat-kf-reopen-after-close@example.com",
+    )
+    channel_data = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        json={"type": "wechat_kf", "name": "微信客服", "reply_mode": "assist", "status": "active"},
+    ).json()
+    channel = db_session.get(Channel, channel_data["id"])
+    contact = Contact(
+        tenant_id=tenant["id"],
+        display_name="重复咨询微信客户",
+        wechat="wechat_kf:external-reopen-user-001",
+    )
+    db_session.add(contact)
+    db_session.flush()
+    closed = Conversation(
+        tenant_id=tenant["id"],
+        channel_id=channel.id,
+        contact_id=contact.id,
+        status="closed",
+        priority="normal",
+        subject="已结束的微信客服会话",
+    )
+    db_session.add(closed)
+    db_session.commit()
+
+    result = create_trusted_inbound_message_if_ready(
+        db_session,
+        channel=channel,
+        provider="wechat_kf",
+        event_type="message",
+        provider_event_id="",
+        external_message_id="wechat-kf-message-after-close-001",
+        raw_payload={
+            "external_userid": "external-reopen-user-001",
+            "Content": "结束后再次咨询",
+            "open_kfid": "wk-reopen-001",
+        },
+    )
+    db_session.commit()
+
+    assert result.status == "trusted_inbound_message_created"
+    assert result.conversation_id != closed.id
+    reopened = db_session.get(Conversation, result.conversation_id)
+    assert reopened.status == "bot_visiting"
+    assert reopened.contact_id == contact.id
+    assert db_session.get(Conversation, closed.id).status == "closed"
+    message = db_session.get(Message, result.trusted_message_id)
+    assert message.content == "结束后再次咨询"
 
 
 def test_wechat_kf_successful_send_preserves_agent_state_and_records_ai_message(

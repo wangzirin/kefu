@@ -201,7 +201,9 @@ def _latest_conversation_for_contact(
 
 
 def _provider_blocks_reopen_after_close(provider: str) -> bool:
-    return provider in {"wecom", "wechat_kf", "wechat_official_account", "wechat_miniapp"}
+    # 微信客服的新客户消息代表一次新的咨询；关闭旧会话后必须允许
+    # 同一 external_userid 创建新的统一会话，保持与网站“继续聊天”一致。
+    return provider in {"wecom", "wechat_official_account", "wechat_miniapp"}
 
 
 def _message_from_existing_receipt(receipt: ChannelDeliveryReceipt) -> tuple[int | None, int | None, int | None]:
