@@ -5837,18 +5837,22 @@ export function App() {
         capabilities: ["receive_inbound", "draft_reply"],
         public_config: {
           self_service_configured: true,
-          external_write: "disabled",
+          external_write: normalizedProvider === "wechat_kf" ? "enabled" : "disabled",
           configured_from: "channel_console",
           ...publicConfig
         },
         webhook_path: `/api/webhooks/${normalizedProvider.replace(/_/g, "-")}/channels/${channelId}`,
-        signature_mode: getConnectorSignatureMode(normalizedProvider)
+        signature_mode: getConnectorSignatureMode(normalizedProvider),
+        external_write_enabled: normalizedProvider === "wechat_kf"
       });
       setChannelConnectorSelfService((current) => ({
         ...current,
         config,
         status: "ready",
-        message: "连接器配置已保存，真实外发仍关闭。"
+        message:
+          normalizedProvider === "wechat_kf"
+            ? "连接器配置已保存；服务器总开关开启后可进行微信客服真实外发。"
+            : "连接器配置已保存，真实外发仍关闭。"
       }));
       return config;
     } catch (error) {

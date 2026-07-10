@@ -5,8 +5,9 @@ import time
 
 from Crypto.Cipher import AES
 
-from app.models import OutboxDraft
-from app.services.channel_senders import _wechat_external_user_id
+from app.models import Channel, ChannelConnector, Contact, Conversation, Message, OutboxDraft
+from app.services.channel_senders import _wechat_external_user_id, _wechat_kf_send
+from app.services.wechat_kf_api import WechatKfApiResult
 from test_channel_connectors_api import _bootstrap_owner, _create_connector
 
 
@@ -333,3 +334,244 @@ def test_wechat_kf_manual_connector_url_verification_and_message_enters_service_
     assert encrypt not in str(stored)
     assert TEST_TOKEN not in str(stored)
     assert TEST_ENCODING_AES_KEY not in str(stored)
+
+
+def test_wechat_kf_notification_syncs_real_customer_message_once(client, monkeypatch, tmp_path, db_session) -> None:
+    monkeypatch.setattr(
+        "app.services.channel_secret_store._secret_store_path",
+        lambda: tmp_path / "local_channel_secrets.json",
+    )
+    tenant, token = _bootstrap_owner(client, slug="wechat-kf-sync", email="wechat-kf-sync@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    channel = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        json={"type": "wechat_kf", "name": "微信客服", "reply_mode": "assist", "status": "active"},
+    ).json()
+    _create_connector(
+        client,
+        channel["id"],
+        headers,
+        provider="wechat_kf",
+        display_name="微信客服",
+        capabilities=["receive_message", "draft_reply"],
+        public_config={"corp_id": TEST_RECEIVER_ID},
+        webhook_path=f"/api/webhooks/wechat-kf/channels/{channel['id']}",
+        signature_mode="wechat_kf_token_aeskey",
+    )
+    secret_res = client.post(
+        f"/api/channels/{channel['id']}/connector-secrets",
+        headers=headers,
+        json={
+            "secrets": {
+                "token": TEST_TOKEN,
+                "encoding_aes_key": TEST_ENCODING_AES_KEY,
+                "corp_id": TEST_RECEIVER_ID,
+                "open_kfid": "kf-sync-open-kfid",
+                "app_secret": "wechat-kf-sync-secret",
+            }
+        },
+    )
+    assert secret_res.status_code == 200
+
+    sync_calls: list[dict] = []
+
+    def fake_sync_messages(**kwargs):
+        sync_calls.append(kwargs)
+        return WechatKfApiResult(
+            payload={
+                "errcode": 0,
+                "errmsg": "ok",
+                "next_cursor": "cursor-after-message-001",
+                "has_more": 0,
+                "msg_list": [
+                    {
+                        "msgid": "wechat-kf-synced-message-001",
+                        "open_kfid": "kf-sync-open-kfid",
+                        "external_userid": "external-wechat-kf-sync-user-001",
+                        "send_time": 1710000000,
+                        "origin": 3,
+                        "msgtype": "text",
+                        "text": {"content": "这是一条通过同步接口取得的客户消息"},
+                    },
+                    {
+                        "msgid": "wechat-kf-agent-origin-message",
+                        "open_kfid": "kf-sync-open-kfid",
+                        "external_userid": "external-wechat-kf-sync-user-001",
+                        "send_time": 1710000001,
+                        "origin": 5,
+                        "msgtype": "text",
+                        "text": {"content": "企业微信客户端坐席消息不应当作客户入站"},
+                    },
+                ],
+            }
+        )
+
+    monkeypatch.setattr("app.services.channel_connectors.sync_messages", fake_sync_messages)
+    inner_xml = """
+<xml>
+  <ToUserName><![CDATA[ww-p3-05e-test-corp]]></ToUserName>
+  <CreateTime>1710000000</CreateTime>
+  <Event><![CDATA[kf_msg_or_event]]></Event>
+  <Token><![CDATA[wechat-kf-callback-sync-token]]></Token>
+</xml>
+""".strip()
+    encrypt = _encrypt_wecom_text(inner_xml)
+    timestamp = _fresh_timestamp()
+    nonce = "wechat-kf-sync-notification"
+    signature = _sha1_sorted_signature(TEST_TOKEN, timestamp, nonce, encrypt)
+    outer_xml = f"<xml><Encrypt><![CDATA[{encrypt}]]></Encrypt></xml>"
+    callback_url = (
+        f"/api/webhooks/wechat-kf/channels/{channel['id']}"
+        f"?msg_signature={signature}&timestamp={timestamp}&nonce={nonce}"
+    )
+
+    first = client.post(callback_url, content=outer_xml, headers={"Content-Type": "application/xml"})
+    assert first.status_code == 200
+    assert first.text == "success"
+    assert sync_calls[0]["cursor"] == ""
+
+    second = client.post(callback_url, content=outer_xml, headers={"Content-Type": "application/xml"})
+    assert second.status_code == 200
+    assert second.text == "success"
+    assert sync_calls[1]["cursor"] == "cursor-after-message-001"
+
+    inbound_messages = db_session.query(Message).filter(Message.direction == "inbound").all()
+    assert [item.external_message_id for item in inbound_messages] == ["wechat-kf-synced-message-001"]
+    assert inbound_messages[0].content == "这是一条通过同步接口取得的客户消息"
+    connector = db_session.query(ChannelConnector).filter(ChannelConnector.channel_id == channel["id"]).one()
+    assert connector.public_config["wechat_kf_sync_cursor"] == "cursor-after-message-001"
+    assert connector.public_config["open_kfid"] == "kf-sync-open-kfid"
+    public_connector = client.get(f"/api/channels/{channel['id']}/connector-config", headers=headers).json()
+    assert "wechat_kf_sync_cursor" not in public_connector["public_config"]
+
+
+def test_wechat_kf_successful_send_preserves_agent_state_and_records_ai_message(
+    client, monkeypatch, tmp_path, db_session
+) -> None:
+    monkeypatch.setattr(
+        "app.services.channel_secret_store._secret_store_path",
+        lambda: tmp_path / "local_channel_secrets.json",
+    )
+    tenant, token = _bootstrap_owner(client, slug="wechat-kf-send", email="wechat-kf-send@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    channel_data = client.post(
+        f"/api/tenants/{tenant['id']}/channels",
+        json={"type": "wechat_kf", "name": "微信客服", "reply_mode": "assist", "status": "active"},
+    ).json()
+    connector_data = _create_connector(
+        client,
+        channel_data["id"],
+        headers,
+        provider="wechat_kf",
+        display_name="微信客服",
+        public_config={"corp_id": TEST_RECEIVER_ID},
+        external_write_enabled=True,
+    )
+    client.post(
+        f"/api/channels/{channel_data['id']}/connector-secrets",
+        headers=headers,
+        json={
+            "secrets": {
+                "token": TEST_TOKEN,
+                "encoding_aes_key": TEST_ENCODING_AES_KEY,
+                "corp_id": TEST_RECEIVER_ID,
+                "open_kfid": "kf-send-open-kfid",
+                "app_secret": "wechat-kf-send-secret",
+            }
+        },
+    )
+    channel = db_session.get(Channel, channel_data["id"])
+    connector = db_session.get(ChannelConnector, connector_data["id"])
+    contact = Contact(
+        tenant_id=tenant["id"],
+        display_name="微信客户",
+        wechat="wechat_kf:external-send-user-001",
+    )
+    db_session.add(contact)
+    db_session.flush()
+
+    agent_conversation = Conversation(
+        tenant_id=tenant["id"],
+        channel_id=channel.id,
+        contact_id=contact.id,
+        assigned_user_id=1,
+        status="assigned_to_me",
+        priority="normal",
+        subject="人工回复",
+    )
+    db_session.add(agent_conversation)
+    db_session.flush()
+    agent_message = Message(
+        conversation_id=agent_conversation.id,
+        direction="outbound",
+        sender_type="agent",
+        content="您好，我来帮您处理",
+        external_message_id="agent-local-001",
+    )
+    db_session.add(agent_message)
+    db_session.flush()
+    agent_draft = OutboxDraft(
+        tenant_id=tenant["id"],
+        conversation_id=agent_conversation.id,
+        channel_id=channel.id,
+        contact_id=contact.id,
+        source_message_id=agent_message.id,
+        status="ready_to_send",
+        reply_text=agent_message.content,
+        idempotency_key="wechat-kf-agent-send-state",
+    )
+    db_session.add(agent_draft)
+    db_session.flush()
+
+    sent_payloads: list[dict] = []
+
+    def fake_send_text_message(**kwargs):
+        sent_payloads.append(kwargs)
+        return WechatKfApiResult(payload={"errcode": 0, "errmsg": "ok", "msgid": f"sent-{len(sent_payloads)}"})
+
+    monkeypatch.setattr("app.services.channel_senders.send_text_message", fake_send_text_message)
+    agent_result = _wechat_kf_send(db_session, draft=agent_draft, connector=connector)
+    assert agent_result.status == "succeeded"
+    assert agent_conversation.status == "assigned_to_me"
+    assert db_session.query(Message).filter(Message.conversation_id == agent_conversation.id).count() == 1
+
+    ai_conversation = Conversation(
+        tenant_id=tenant["id"],
+        channel_id=channel.id,
+        contact_id=contact.id,
+        status="bot_visiting",
+        priority="normal",
+        subject="AI 回复",
+    )
+    db_session.add(ai_conversation)
+    db_session.flush()
+    inbound = Message(
+        conversation_id=ai_conversation.id,
+        direction="inbound",
+        sender_type="visitor",
+        content="你们几点上班",
+        external_message_id="inbound-ai-001",
+    )
+    db_session.add(inbound)
+    db_session.flush()
+    ai_draft = OutboxDraft(
+        tenant_id=tenant["id"],
+        conversation_id=ai_conversation.id,
+        channel_id=channel.id,
+        contact_id=contact.id,
+        source_message_id=inbound.id,
+        status="ready_to_send",
+        reply_text="营业时间是 9:00-18:00",
+        idempotency_key="wechat-kf-ai-send-message",
+    )
+    db_session.add(ai_draft)
+    db_session.flush()
+    ai_result = _wechat_kf_send(db_session, draft=ai_draft, connector=connector)
+    assert ai_result.status == "succeeded"
+    ai_messages = db_session.query(Message).filter(Message.conversation_id == ai_conversation.id).all()
+    assert [(item.direction, item.sender_type, item.content) for item in ai_messages] == [
+        ("inbound", "visitor", "你们几点上班"),
+        ("outbound", "ai", "营业时间是 9:00-18:00"),
+    ]
+    assert ai_conversation.status == "bot_visiting"
+    assert sent_payloads[0]["touser"] == "external-send-user-001"

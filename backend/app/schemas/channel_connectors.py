@@ -1,8 +1,7 @@
 from datetime import datetime
-from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.schemas.outbox import OutboxSendAttemptRead
 
@@ -37,6 +36,10 @@ class ChannelConnectorConfigRead(BaseModel):
     updated_by_id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+    @field_serializer("public_config")
+    def serialize_public_config(self, value: dict[str, Any]) -> dict[str, Any]:
+        return {key: item for key, item in value.items() if key != "wechat_kf_sync_cursor"}
 
     model_config = {"from_attributes": True}
 

@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +9,7 @@ from app.models import Channel, ChannelConnector, Contact, Conversation, Message
 from app.models.foundation import utc_now
 from app.services.channel_provider_registry import normalize_provider
 from app.services.channel_secret_store import resolve_webhook_secret_material
+from app.services.wechat_kf_api import WechatKfApiError, send_text_message
 
 
 @dataclass(frozen=True)
@@ -110,68 +107,41 @@ def _wechat_kf_send(db: Session, *, draft: OutboxDraft, connector: ChannelConnec
         )
     settings = get_settings()
     try:
-        token_query = urlencode({"corpid": material.receiver_id, "corpsecret": material.app_secret})
-        with urlopen(
-            f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?{token_query}",
+        send_body = send_text_message(
+            material=material,
+            touser=touser,
+            open_kfid=open_kfid,
+            content=draft.reply_text.strip(),
             timeout=settings.model_http_timeout_seconds,
-        ) as response:
-            token_body = json.loads(response.read().decode("utf-8"))
-        access_token = str(token_body.get("access_token") or "")
-        if not access_token:
-            return ChannelSendResult(
-                status="failed",
-                delivery_status="not_sent",
-                error_message=f"wechat_kf token error: {token_body.get('errmsg') or token_body.get('errcode')}",
-                response_payload={"provider_response": _safe_provider_response(token_body), "secret_included": False},
-                retryable=True,
-            )
-        payload = {
-            "touser": touser,
-            "open_kfid": open_kfid,
-            "msgtype": "text",
-            "text": {"content": draft.reply_text.strip()},
-        }
-        request = Request(
-            f"https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg?access_token={access_token}",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlopen(request, timeout=settings.model_http_timeout_seconds) as response:
-            send_body = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
+        ).payload
+    except WechatKfApiError as exc:
         return ChannelSendResult(
             status="failed",
             delivery_status="failed",
-            error_message=f"wechat_kf HTTP {exc.code}",
+            error_message=str(exc)[:240],
             response_payload={"secret_included": False},
-            retryable=True,
-        )
-    except (URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
-        return ChannelSendResult(
-            status="failed",
-            delivery_status="failed",
-            error_message=f"wechat_kf send failed: {str(exc)[:200]}",
-            response_payload={"secret_included": False},
-            retryable=True,
-        )
-    errcode = int(send_body.get("errcode") or 0)
-    if errcode != 0:
-        return ChannelSendResult(
-            status="failed",
-            delivery_status="failed",
-            error_message=f"wechat_kf provider error: {errcode} {send_body.get('errmsg') or ''}".strip(),
-            response_payload={"provider_response": _safe_provider_response(send_body), "secret_included": False},
-            retryable=errcode in {-1, 45009, 45047, 40001, 42001},
+            retryable=exc.retryable,
         )
     now = utc_now()
     draft.delivery_status = "sent"
     draft.sent_at = now
     draft.updated_at = now
     conversation = db.get(Conversation, draft.conversation_id)
+    source_message = db.get(Message, draft.source_message_id) if draft.source_message_id else None
     if conversation is not None:
-        conversation.status = "bot_visiting"
+        if source_message is None or source_message.direction == "inbound":
+            ai_message = Message(
+                conversation_id=conversation.id,
+                direction="outbound",
+                sender_type="ai",
+                content=draft.reply_text.strip(),
+                external_message_id=str(send_body.get("msgid") or f"wechat-kf-{draft.id}"),
+                created_at=now,
+            )
+            db.add(ai_message)
+            conversation.status = "bot_visiting"
         conversation.last_message_at = now
+    db.flush()
     return ChannelSendResult(
         status="succeeded",
         delivery_status="sent",

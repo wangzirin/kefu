@@ -533,7 +533,7 @@ export function ChannelConnectorCenterPanel({
         status: verification.status === "verified" ? "success" : "error",
         message:
           verification.status === "verified"
-            ? "手动接入配置完整，已连到本系统回调入口；真实外发仍需白名单验收。"
+            ? "手动接入配置完整，已连到本系统回调入口；服务器总开关开启后即可进行真实收发验收。"
             : `配置未完成：${verification.missing_fields.join("、") || verification.status}`
       });
     } catch (error) {

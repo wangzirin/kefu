@@ -207,7 +207,12 @@ def test_ai_service_status_and_connector_secrets_never_return_plaintext(client, 
         email="connector-secret-status@example.com",
     )
     headers = {"Authorization": f"Bearer {token}"}
+    monkeypatch.setattr(
+        "app.services.channel_secret_store._secret_store_path",
+        lambda: tmp_path / "local_channel_secrets.json",
+    )
     monkeypatch.delenv("BAILIAN_API_KEY", raising=False)
+    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
     status_res = client.get(f"/api/tenants/{tenant['id']}/ai-service-status", headers=headers)
     assert status_res.status_code == 200
     status_body = status_res.json()
@@ -223,10 +228,6 @@ def test_ai_service_status_and_connector_secrets_never_return_plaintext(client, 
     assert ready_body["secret_included"] is False
     assert "test-only-placeholder" not in str(ready_body)
 
-    monkeypatch.setattr(
-        "app.services.channel_secret_store._secret_store_path",
-        lambda: tmp_path / "local_channel_secrets.json",
-    )
     channel, _ready = _ready_outbox_draft(client, tenant["id"], headers)
     _create_connector(client, channel["id"], headers)
     secret_res = client.post(

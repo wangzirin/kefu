@@ -3527,6 +3527,7 @@ export async function configureChannelConnector(
     public_config?: Record<string, unknown>;
     webhook_path?: string;
     signature_mode?: string;
+    external_write_enabled?: boolean;
   }
 ): Promise<ChannelConnectorConfig> {
   return requestJson<ChannelConnectorConfig>(
@@ -3538,6 +3539,7 @@ export async function configureChannelConnector(
         status: "draft",
         capabilities: [],
         public_config: {},
+        external_write_enabled: false,
         ...payload
       })
     },

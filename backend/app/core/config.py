@@ -42,6 +42,7 @@ class Settings:
     siliconflow_reranker_model: str
     siliconflow_llm_model: str
     model_http_timeout_seconds: float
+    wechat_kf_http_timeout_seconds: float
     model_budget_guard_enabled: bool
     model_budget_daily_limit_cny: float
     model_budget_monthly_limit_cny: float
@@ -116,6 +117,7 @@ def get_settings() -> Settings:
         siliconflow_reranker_model=os.getenv("SILICONFLOW_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3").strip(),
         siliconflow_llm_model=os.getenv("SILICONFLOW_LLM_MODEL", "Qwen/Qwen3-8B").strip(),
         model_http_timeout_seconds=float(os.getenv("MODEL_HTTP_TIMEOUT_SECONDS", "20")),
+        wechat_kf_http_timeout_seconds=float(os.getenv("WECHAT_KF_HTTP_TIMEOUT_SECONDS", "3.5")),
         model_budget_guard_enabled=os.getenv("MODEL_BUDGET_GUARD_ENABLED", "true").strip().lower()
         in {"1", "true", "yes", "on"},
         model_budget_daily_limit_cny=float(os.getenv("MODEL_BUDGET_DAILY_LIMIT_CNY", "0")),

@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import PlainTextResponse
-from sqlalchemy.orm import Session
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
+from fastapi.responses import JSONResponse, PlainTextResponse
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.auth import CurrentPrincipal
 from app.core.rbac import require_permission
@@ -55,6 +57,21 @@ from app.services.channel_connectors import (
     verify_wecom_callback_url,
     verify_wechat_kf_callback_url,
 )
+from app.services.ai_reply_cycle import process_inbound_message_for_ai
+
+
+logger = logging.getLogger(__name__)
+
+
+def _process_wechat_kf_synced_messages(bind, message_ids: list[int]) -> None:
+    factory = sessionmaker(bind=bind, autoflush=False, autocommit=False, expire_on_commit=False)
+    with factory() as db:
+        for message_id in message_ids:
+            try:
+                process_inbound_message_for_ai(db, message_id=message_id)
+            except Exception:
+                db.rollback()
+                logger.exception("wechat_kf background AI cycle failed for message_id=%s", message_id)
 
 router = APIRouter(prefix="/api", tags=["channel-connectors"])
 legacy_router = APIRouter(tags=["channel-connectors"])
@@ -272,31 +289,45 @@ def verify_wecom_official_callback_url(
 
 @router.post(
     "/webhooks/wechat-kf/channels/{channel_id}",
-    response_model=ChannelWebhookEventRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    response_model=None,
+    response_class=PlainTextResponse,
+    status_code=status.HTTP_200_OK,
 )
 async def receive_wechat_kf_xml_channel_webhook(
     channel_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-) -> dict:
+):
     content_type = request.headers.get("content-type", "").lower()
     if "json" in content_type:
         payload = ChannelWebhookEventCreate.model_validate(await request.json())
-        return receive_channel_webhook_event(
-            db,
-            provider="wechat_kf",
-            channel_id=channel_id,
-            payload=payload,
-            query_params=dict(request.query_params),
+        return JSONResponse(
+            receive_channel_webhook_event(
+                db,
+                provider="wechat_kf",
+                channel_id=channel_id,
+                payload=payload,
+                query_params=dict(request.query_params),
+            ),
+            status_code=status.HTTP_202_ACCEPTED,
         )
     raw_body = (await request.body()).decode("utf-8")
-    return receive_wechat_kf_xml_webhook(
+    result = receive_wechat_kf_xml_webhook(
         db,
         channel_id=channel_id,
         xml_body=raw_body,
         query_params=dict(request.query_params),
     )
+    synced_messages = result.get("parsed_event", {}).get("synced_messages", [])
+    message_ids = [
+        int(item["message_id"])
+        for item in synced_messages
+        if item.get("message_id") and item.get("idempotency_status") == "created"
+    ]
+    if message_ids:
+        background_tasks.add_task(_process_wechat_kf_synced_messages, db.get_bind(), message_ids)
+    return PlainTextResponse("success")
 
 
 @router.get("/webhooks/wechat-kf/channels/{channel_id}", response_class=PlainTextResponse)

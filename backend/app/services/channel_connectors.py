@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import add_audit_event
 from app.core.auth import CurrentPrincipal
+from app.core.config import get_settings
 from app.models import (
     Channel,
     ChannelAccount,
@@ -55,6 +56,7 @@ from app.services.wecom_callback_crypto import (
 from app.services.delivery_failures import attach_delivery_normalization_and_review
 from app.services.trusted_inbound_messages import TrustedInboundResult, create_trusted_inbound_message_if_ready
 from app.services.ai_reply_cycle import process_inbound_message_for_ai
+from app.services.wechat_kf_api import WechatKfApiError, sync_messages
 
 
 READY_TO_SEND = "ready_to_send"
@@ -1163,6 +1165,145 @@ def _event_type_from_wechat_payload(raw_payload: dict) -> str:
     return "message"
 
 
+def _wechat_kf_synced_content(message: dict) -> str:
+    msgtype = str(message.get("msgtype") or "").strip().lower()
+    section = message.get(msgtype)
+    if isinstance(section, dict):
+        for key in ("content", "title", "name", "filename"):
+            value = section.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    labels = {
+        "image": "[图片消息]",
+        "voice": "[语音消息]",
+        "video": "[视频消息]",
+        "file": "[文件消息]",
+        "location": "[位置消息]",
+        "link": "[链接消息]",
+        "business_card": "[名片消息]",
+        "miniprogram": "[小程序消息]",
+    }
+    return labels.get(msgtype, "")
+
+
+def _receive_wechat_kf_sync_notification(
+    db: Session,
+    *,
+    channel_id: int,
+    connector: ChannelConnector,
+    raw_payload: dict,
+    query_params: dict[str, str],
+) -> dict:
+    notification = receive_channel_webhook_event(
+        db,
+        provider="wechat_kf",
+        channel_id=channel_id,
+        payload=ChannelWebhookEventCreate(
+            event_type="customer_event",
+            delivery_status="received",
+            raw_payload=raw_payload,
+        ),
+        query_params=query_params,
+    )
+    callback_token = _pick_first_string(raw_payload, ("Token", "token"))
+    resolution = resolve_webhook_secret_material(provider="wechat_kf", public_config=connector.public_config)
+    if resolution.material is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"wechat_kf sync secret unavailable: {resolution.status}",
+        )
+
+    cursor = str((connector.public_config or {}).get("wechat_kf_sync_cursor") or "")
+    synced_results: list[dict] = []
+    discovered_open_kfids: set[str] = set()
+    pages = 0
+    try:
+        while pages < 10:
+            sync_result = sync_messages(
+                material=resolution.material,
+                callback_token=callback_token,
+                cursor=cursor,
+                timeout=get_settings().wechat_kf_http_timeout_seconds,
+            ).payload
+            pages += 1
+            for synced_message in sync_result.get("msg_list") or []:
+                if not isinstance(synced_message, dict) or int(synced_message.get("origin") or 0) != 3:
+                    continue
+                content = _wechat_kf_synced_content(synced_message)
+                external_message_id = str(synced_message.get("msgid") or "").strip()
+                external_user_id = str(synced_message.get("external_userid") or "").strip()
+                open_kfid = str(synced_message.get("open_kfid") or "").strip()
+                if open_kfid:
+                    discovered_open_kfids.add(open_kfid)
+                if not content or not external_message_id or not external_user_id:
+                    continue
+                normalized_payload = {
+                    "MsgID": external_message_id,
+                    "MsgType": str(synced_message.get("msgtype") or "text"),
+                    "Content": content,
+                    "external_userid": external_user_id,
+                    "open_kfid": open_kfid,
+                    "send_time": synced_message.get("send_time"),
+                    "origin": 3,
+                    "_wechat_kf_sync_message": True,
+                    "Encrypt": raw_payload.get("Encrypt", ""),
+                    "_official_xml_decrypted": True,
+                }
+                item = receive_channel_webhook_event(
+                    db,
+                    provider="wechat_kf",
+                    channel_id=channel_id,
+                    payload=ChannelWebhookEventCreate(
+                        event_type="message",
+                        external_message_id=external_message_id,
+                        delivery_status="received",
+                        provider_event_id=external_message_id,
+                        raw_payload=normalized_payload,
+                    ),
+                    query_params=query_params,
+                    process_ai=False,
+                )
+                synced_results.append(
+                    {
+                        "message_id": item["parsed_event"].get("trusted_message_id"),
+                        "conversation_id": item["parsed_event"].get("conversation_id"),
+                        "external_message_id": external_message_id,
+                        "idempotency_status": item["parsed_event"].get("idempotency_status"),
+                        "ai_cycle_result": item["parsed_event"].get("ai_cycle_result"),
+                    }
+                )
+            next_cursor = str(sync_result.get("next_cursor") or cursor)
+            if next_cursor:
+                cursor = next_cursor
+            if not bool(sync_result.get("has_more")):
+                break
+    except WechatKfApiError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc)[:240],
+        ) from exc
+
+    updated_public_config = {
+        **(connector.public_config or {}),
+        "wechat_kf_sync_cursor": cursor,
+    }
+    if not updated_public_config.get("open_kfid") and len(discovered_open_kfids) == 1:
+        updated_public_config["open_kfid"] = next(iter(discovered_open_kfids))
+    connector.public_config = updated_public_config
+    connector.updated_at = utc_now()
+    db.commit()
+    notification["parsed_event"] = {
+        **notification["parsed_event"],
+        "status": "wechat_kf_messages_synced",
+        "sync_pages": pages,
+        "synced_customer_message_count": len(synced_results),
+        "synced_messages": synced_results,
+        "cursor_advanced": bool(cursor),
+    }
+    notification["next_action"] = "wechat_kf_messages_processed"
+    return notification
+
+
 def _receive_encrypted_wechat_xml_webhook(
     db: Session,
     *,
@@ -1208,6 +1349,14 @@ def _receive_encrypted_wechat_xml_webhook(
             not material.receiver_id or hmac.compare_digest(decrypted.receiver_id, material.receiver_id)
         ),
     }
+    if provider == "wechat_kf" and _pick_first_string(raw_payload, ("Event", "event")) == "kf_msg_or_event":
+        return _receive_wechat_kf_sync_notification(
+            db,
+            channel_id=channel_id,
+            connector=connector,
+            raw_payload=raw_payload,
+            query_params=query_params,
+        )
     payload = ChannelWebhookEventCreate(
         event_type=_event_type_from_wechat_payload(raw_payload),
         external_message_id=_pick_first_string(raw_payload, ("MsgID", "MsgId")),
@@ -1312,6 +1461,7 @@ def receive_channel_webhook_event(
     channel_id: int,
     payload: ChannelWebhookEventCreate,
     query_params: dict[str, str],
+    process_ai: bool = True,
 ) -> dict:
     channel, connector, contract = _require_webhook_connector(db, provider=provider, channel_id=channel_id)
     verification = verify_channel_webhook_request(
@@ -1369,7 +1519,11 @@ def receive_channel_webhook_event(
         "raw_payload_keys": sorted(payload.raw_payload.keys()),
     }
     ai_cycle_result = None
-    if trusted_inbound.trusted_message_id is not None and trusted_inbound.idempotency_status == "created":
+    if (
+        process_ai
+        and trusted_inbound.trusted_message_id is not None
+        and trusted_inbound.idempotency_status == "created"
+    ):
         ai_cycle_result = process_inbound_message_for_ai(db, message_id=trusted_inbound.trusted_message_id)
         parsed_event["ai_cycle_result"] = ai_cycle_result
     stored_payload = {
