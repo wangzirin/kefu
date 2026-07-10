@@ -712,7 +712,15 @@ export function ChannelConnectorCenterPanel({
 
   useEffect(() => {
     if (!accountDraft.channelId) return;
-    setSecretDraft(createGeneratedSecretDraft(activeEntry.id));
+    setSecretDraft((current) => {
+      const generated = createGeneratedSecretDraft(activeEntry.id);
+      return {
+        ...current,
+        token: current.token || generated.token,
+        encodingAesKey: current.encodingAesKey || generated.encodingAesKey,
+        webhookSigningSecret: current.webhookSigningSecret || generated.webhookSigningSecret
+      };
+    });
   }, [accountDraft.channelId, activeEntry.id]);
 
   const filteredComponents = activeComponents.filter((component) => {
